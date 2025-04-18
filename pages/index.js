@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Badge } from 'shadcn/ui/badge';
-import { Button } from 'shadcn/ui/button';
-import { Card, CardContent } from 'shadcn/ui/card';
-import { Input } from 'shadcn/ui/input';
-import { ScrollArea } from 'shadcn/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { ArrowRight, MessageSquare, Sword } from 'lucide-react';
 
 export default function Home() {
@@ -49,25 +49,26 @@ export default function Home() {
   const sendMessage = async () => {
     if (!selectedAI || selectedAI.msg_tokens <= 0 || !msgContent.trim()) return;
     await fetch('/api/message', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ sender_id:1, recipient_id:selectedAI.id, content:msgContent.trim() })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sender_id: 1, recipient_id: selectedAI.id, content: msgContent.trim() })
     });
     setMsgContent('');
   };
 
   const attack = async id => {
-    if (players.find(p=>p.is_human).atk_tokens <= 0) return;
+    const human = players.find(p => p.is_human);
+    if (!human || human.atk_tokens <= 0) return;
     await fetch('/api/attack', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ target_id:id })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_id: id })
     });
   };
 
   const ais = players.filter(p => !p.is_human);
-  const human = players.find(p => p.is_human) || { health:0, msg_tokens:0, atk_tokens:0 };
+  const human = players.find(p => p.is_human) || { health: 0, msg_tokens: 0, atk_tokens: 0 };
   const chat = messages.filter(
-    m => selectedAI && ((m.sender_id===selectedAI.id && m.recipient_id===human.id) ||
-                         (m.sender_id===human.id && m.recipient_id===selectedAI.id))
+    m => selectedAI && ((m.sender_id === selectedAI.id && m.recipient_id === human.id) ||
+                         (m.sender_id === human.id && m.recipient_id === selectedAI.id))
   );
 
   return (
@@ -77,16 +78,14 @@ export default function Home() {
         <ScrollArea className="flex-1 mb-4">
           <ul>
             {ais.map(ai => (
-              <Card key={ai.id}
-                className={`mb-2 cursor-pointer hover:bg-blue-50 ${selectedAI?.id===ai.id?'ring-2 ring-blue-500':'ring-1 ring-gray-200'}`}
-                onClick={()=>selectAI(ai)}>
+              <Card key={ai.id} onClick={() => selectAI(ai)} className={`mb-2 cursor-pointer hover:bg-blue-50 ${selectedAI?.id === ai.id ? 'ring-2 ring-blue-500' : 'ring-1 ring-gray-200'}`}>
                 <CardContent className="flex justify-between items-center">
                   <span className="font-medium">{ai.name}</span>
                   <div className="flex items-center space-x-2">
                     <Badge variant="secondary">{ai.health} HP</Badge>
                     <Badge variant="secondary">{ai.msg_tokens}💬</Badge>
                     <Badge variant="secondary">{ai.atk_tokens}🗡️</Badge>
-                    {unreadCounts[ai.id]>0 && <Badge variant="destructive">{unreadCounts[ai.id]}</Badge>}
+                    {unreadCounts[ai.id] > 0 && <Badge variant="destructive">{unreadCounts[ai.id]}</Badge>}
                   </div>
                 </CardContent>
               </Card>
@@ -96,9 +95,7 @@ export default function Home() {
         <div className="space-y-1">
           <div className="flex justify-between"><span>You: {human.health} HP</span></div>
           <div className="flex justify-between"><span>Msg Tokens</span><span>{human.msg_tokens}</span></div>
-          <div className="h-2 bg-gray-200 rounded overflow-hidden"><div className="bg-blue-500 h-full" style={{ width:`${100-((human.last_token_refill? ((Date.now()-new Date(human.last_token_refill))/1000)%30 :30)/30*100)}%` }} /></div>
           <div className="flex justify-between"><span>Atk Tokens</span><span>{human.atk_tokens}</span></div>
-          <div className="h-2 bg-gray-200 rounded overflow-hidden"><div className="bg-red-500 h-full" style={{ width:`${100-((human.last_token_refill? ((Date.now()-new Date(human.last_token_refill))/1000)%60 :60)/60*100)}%` }} /></div>
         </div>
       </aside>
       <main className="flex-1 flex flex-col">
@@ -110,18 +107,18 @@ export default function Home() {
             {selectedAI ? (
               <>
                 <div className="flex-1 overflow-y-auto mb-4 space-y-4">
-                  {chat.map((m,i)=>(
-                    <div key={i} className={`flex ${m.sender_id===human.id?'justify-end':'justify-start'}`}>
-                      <div className={`max-w-xs p-3 rounded-lg ${m.sender_id===human.id?'bg-blue-600 text-white':'bg-gray-200 text-gray-800'}`}>
+                  {chat.map((m, i) => (
+                    <div key={i} className={`flex ${m.sender_id === human.id ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-xs p-3 rounded-lg ${m.sender_id === human.id ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-800'}`}>
                         {m.content}
                       </div>
                     </div>
                   ))}
                 </div>
                 <div className="flex space-x-3">
-                  <Input placeholder="Type message..." value={msgContent} onChange={e=>setMsgContent(e.target.value)} className="flex-1" disabled={human.msg_tokens<=0}/>
-                  <Button disabled={human.msg_tokens<=0} onClick={sendMessage}><MessageSquare className="mr-2"/>Send</Button>
-                  <Button variant="destructive" disabled={human.atk_tokens<=0} onClick={()=>attack(selectedAI.id)}><ArrowRight className="mr-2"/>Attack</Button>
+                  <Input placeholder="Type message..." value={msgContent} onChange={e => setMsgContent(e.target.value)} className="flex-1" disabled={human.msg_tokens <= 0} />
+                  <Button disabled={human.msg_tokens <= 0} onClick={sendMessage}><MessageSquare className="mr-2" />Send</Button>
+                  <Button variant="destructive" disabled={human.atk_tokens <= 0} onClick={() => attack(selectedAI.id)}><ArrowRight className="mr-2" />Attack</Button>
                 </div>
               </>
             ) : (
