@@ -1,4 +1,4 @@
--- Run this file on your Supabase project SQL editor
+-- Run this in Supabase SQL
 
 create table if not exists players (
   id serial primary key,
@@ -17,14 +17,14 @@ create table if not exists messages (
   created_at timestamp with time zone default now()
 );
 
--- Initial data: 1 human + 7 AIs
+-- Initial data
 insert into players (name, is_human) values
 ('You', true),
-('AI 1', false),
-('AI 2', false),
-('AI 3', false),
-('AI 4', false),
-('AI 5', false),
-('AI 6', false),
-('AI 7', false)
+('AI Cultist 1', false),
+('AI Cultist 2', false),
+('AI Cultist 3', false),
+('AI Cultist 4', false),
+('AI Cultist 5', false),
+('AI Cultist 6', false),
+('AI Cultist 7', false)
 on conflict do nothing;
