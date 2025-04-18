@@ -6,8 +6,13 @@ export default async function handler(req, res) {
   // Human always id 1
   const attacker_id = 1;
 
+  // Fetch target, reduce health
   const { data: target } = await supabase.from('players').select('*').eq('id', target_id).single();
   const newHealth = target.health - 5;
-  await supabase.from('players').update({ health: newHealth, last_attack: new Date().toISOString() }).eq('id', attacker_id);
+  await supabase
+    .from('players')
+    .update({ health: newHealth, last_attack: new Date().toISOString() })
+    .eq('id', target_id); // Fix: update target, not attacker
+
   res.status(200).json({ success: true });
 }

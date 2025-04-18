@@ -10,6 +10,8 @@ export default function Home() {
   const [atkTokens, setAtkTokens] = useState(1);
   const [msgCountdown, setMsgCountdown] = useState(30);
   const [atkCountdown, setAtkCountdown] = useState(60);
+  const [lastRead, setLastRead] = useState({});
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   // Fetch state
   const fetchState = async () => {
@@ -28,7 +30,6 @@ export default function Home() {
   // Token accumulation logic
   useEffect(() => {
     const timer = setInterval(() => {
-      // Message token countdown
       setMsgCountdown(prev => {
         if (prev <= 1) {
           setMsgTokens(tokens => tokens + 1);
@@ -36,7 +37,6 @@ export default function Home() {
         }
         return prev - 1;
       });
-      // Attack token countdown
       setAtkCountdown(prev => {
         if (prev <= 1) {
           setAtkTokens(tokens => tokens + 1);
@@ -47,6 +47,25 @@ export default function Home() {
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Calculate unread per AI
+  useEffect(() => {
+    const human = players.find(p => p.is_human);
+    const counts = {};
+    players.filter(p => !p.is_human).forEach(ai => {
+      const last = lastRead[ai.id] || 0;
+      counts[ai.id] = messages.filter(
+        m => m.sender_id === ai.id && m.recipient_id === human.id && new Date(m.created_at).getTime() > last
+      ).length;
+    });
+    setUnreadCounts(counts);
+  }, [messages, players, lastRead]);
+
+  const selectAI = (ai) => {
+    setSelectedAI(ai);
+    const now = Date.now();
+    setLastRead(prev => ({ ...prev, [ai.id]: now }));
+  };
 
   const sendMessage = async () => {
     if (!selectedAI || msgTokens <= 0) return;
@@ -80,12 +99,20 @@ export default function Home() {
     <div className="flex h-screen">
       {/* Sidebar */}
       <aside className="w-1/4 bg-gray-800 text-white p-4 flex flex-col">
-        <h2 className="text-xl mb-4">AI Cultists</h2>
+        <h2 className="text-xl mb-4">Cultists</h2>
         <ul className="flex-1 overflow-y-auto">
           {ais.map(ai => (
-            <li key={ai.id} className={`p-2 mb-2 rounded cursor-pointer ${selectedAI?.id === ai.id ? 'bg-gray-700' : 'bg-gray-600'}`}
-                onClick={() => setSelectedAI(ai)}>
+            <li
+              key={ai.id}
+              onClick={() => selectAI(ai)}
+              className={\`p-2 mb-2 rounded cursor-pointer \${selectedAI?.id === ai.id ? 'bg-blue-600' : 'bg-gray-600'} hover:bg-gray-500 relative\`}
+            >
               {ai.name} ({ai.health} HP)
+              {unreadCounts[ai.id] > 0 && (
+                <span className="absolute top-0 right-0 inline-block h-4 w-4 bg-red-500 text-xs text-white rounded-full flex items-center justify-center">
+                  {unreadCounts[ai.id]}
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -108,8 +135,8 @@ export default function Home() {
               <h3 className="text-xl mb-2">Chat with {selectedAI.name}</h3>
               <div className="space-y-2 mb-4">
                 {chat.map((m, i) => (
-                  <div key={i} className={`${m.sender_id === human.id ? 'text-right' : 'text-left'}`}>
-                    <span className={`inline-block p-2 rounded ${m.sender_id === human.id ? 'bg-blue-500 text-white' : 'bg-gray-300 text-black'}`}>
+                  <div key={i} className={m.sender_id === human.id ? 'text-right' : 'text-left'}>
+                    <span className={\`inline-block p-2 rounded \${m.sender_id === human.id ? 'bg-blue-500 text-white' : 'bg-gray-300 text-black'}\`}>
                       {m.content}
                     </span>
                   </div>
@@ -133,17 +160,17 @@ export default function Home() {
               </div>
               <button
                 className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50"
-                  onClick={() => attack(selectedAI.id)}
-                  disabled={atkTokens <= 0}
-                >
-                  Attack {selectedAI.name}
+                onClick={() => attack(selectedAI.id)}
+                disabled={atkTokens <= 0}
+              >
+                Attack {selectedAI.name}
               </button>
             </>
           ) : (
-            <div className="text-center text-gray-500">Select an AI to chat</div>
+            <div className="text-center text-gray-500">Select a cultist to chat</div>
           )}
         </section>
       </main>
     </div>
-);
+  );
 }

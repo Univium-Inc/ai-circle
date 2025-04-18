@@ -20,13 +20,13 @@ create table messages (
   created_at timestamp with time zone default now()
 );
 
--- Seed initial data (1 human + 7 AIs)
+-- Seed initial data (1 human + 7 named AI)
 insert into players (name, is_human) values
 ('You', true),
-('AI Cultist 1', false),
-('AI Cultist 2', false),
-('AI Cultist 3', false),
-('AI Cultist 4', false),
-('AI Cultist 5', false),
-('AI Cultist 6', false),
-('AI Cultist 7', false);
+('Benny', false),
+('Rob', false),
+('Carla', false),
+('Dave', false),
+('Elena', false),
+('Frank', false),
+('Gina', false);
