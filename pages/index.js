@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { Badge } from 'shadcn/ui/badge';
+import { Button } from 'shadcn/ui/button';
+import { Card, CardContent } from 'shadcn/ui/card';
+import { Input } from 'shadcn/ui/input';
+import { ScrollArea } from 'shadcn/ui/scroll-area';
+import { ArrowRight, MessageSquare, Sword } from 'lucide-react';
 
 export default function Home() {
   const [players, setPlayers] = useState([]);
@@ -13,7 +19,6 @@ export default function Home() {
   const [lastRead, setLastRead] = useState({});
   const [unreadCounts, setUnreadCounts] = useState({});
 
-  // Fetch players & messages
   const fetchState = async () => {
     const res = await fetch('/api/state');
     const { players, messages } = await res.json();
@@ -27,42 +32,30 @@ export default function Home() {
     return () => clearInterval(iv);
   }, []);
 
-  // Token accumulation every second
   useEffect(() => {
     const timer = setInterval(() => {
       setMsgCountdown(prev => {
-        if (prev <= 1) {
-          setMsgTokens(t => t + 1);
-          return 30;
-        }
+        if (prev <= 1) { setMsgTokens(t => t + 1); return 30; }
         return prev - 1;
       });
       setAtkCountdown(prev => {
-        if (prev <= 1) {
-          setAtkTokens(t => t + 1);
-          return 60;
-        }
+        if (prev <= 1) { setAtkTokens(t => t + 1); return 60; }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Compute unread counts per AI
   useEffect(() => {
     const human = players.find(p => p.is_human);
     if (!human) return;
     const counts = {};
-    players
-      .filter(p => !p.is_human)
-      .forEach(ai => {
-        const last = lastRead[ai.id] || 0;
-        counts[ai.id] = messages.filter(
-          m => m.sender_id === ai.id
-            && m.recipient_id === human.id
-            && new Date(m.created_at).getTime() > last
-        ).length;
-      });
+    players.filter(p => !p.is_human).forEach(ai => {
+      const last = lastRead[ai.id] || 0;
+      counts[ai.id] = messages.filter(
+        m => m.sender_id === ai.id && m.recipient_id === human.id && new Date(m.created_at).getTime() > last
+      ).length;
+    });
     setUnreadCounts(counts);
   }, [messages, players, lastRead]);
 
@@ -74,131 +67,104 @@ export default function Home() {
   const sendMessage = async () => {
     if (!selectedAI || msgTokens <= 0 || !msgContent.trim()) return;
     await fetch('/api/message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sender_id: 1,
-        recipient_id: selectedAI.id,
-        content: msgContent.trim()
-      })
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sender_id:1, recipient_id:selectedAI.id, content:msgContent.trim() })
     });
     setMsgContent('');
     setMsgTokens(t => t - 1);
   };
 
-  const attack = async targetId => {
+  const attack = async id => {
     if (atkTokens <= 0) return;
-    await fetch('/api/attack', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_id: targetId })
-    });
+    await fetch('/api/attack', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ target_id: id }) });
     setAtkTokens(t => t - 1);
   };
 
   const ais = players.filter(p => !p.is_human);
-  const human = players.find(p => p.is_human) || {};
-  const chat = messages.filter(
-    m =>
-      selectedAI &&
-      ((m.sender_id === selectedAI.id && m.recipient_id === human.id) ||
-       (m.sender_id === human.id && m.recipient_id === selectedAI.id))
+  const human = players.find(p => p.is_human) || { health:0 };
+  const chat = messages.filter(m =>
+    selectedAI && ((m.sender_id === selectedAI.id && m.recipient_id === human.id) || (m.sender_id === human.id && m.recipient_id === selectedAI.id))
   );
 
   return (
-    <div className="flex h-screen">
-      {/* Sidebar */}
-      <aside className="w-1/4 bg-gray-800 text-white p-4 flex flex-col">
-        <h2 className="text-xl mb-4">Cultists</h2>
-        <ul className="flex-1 overflow-y-auto">
-          {ais.map(ai => (
-            <li
-              key={ai.id}
-              onClick={() => selectAI(ai)}
-              className={`p-2 mb-2 rounded cursor-pointer ${
-                selectedAI?.id === ai.id ? 'bg-blue-600' : 'bg-gray-600'
-              } hover:bg-gray-500 relative`}
-            >
-              {ai.name} ({ai.health} HP)
-              {unreadCounts[ai.id] > 0 && (
-                <span className="absolute top-0 right-0 h-4 w-4 bg-red-500 text-xs text-white rounded-full flex items-center justify-center">
-                  {unreadCounts[ai.id]}
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-        <div className="mt-4 space-y-1">
-          <div>Msg Tokens: {msgTokens} (next in {msgCountdown}s)</div>
-          <div>Atk Tokens: {atkTokens} (next in {atkCountdown}s)</div>
-        </div>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col">
-        <header className="bg-white shadow p-4 flex justify-between">
-          <h1 className="text-2xl">Cult Chat Duel</h1>
-          <div>You: {human.health || 0} HP</div>
-        </header>
-
-        <section className="flex-1 bg-gray-100 p-4 overflow-y-auto">
-          {selectedAI ? (
-            <>
-              <h3 className="text-xl mb-2">Chat with {selectedAI.name}</h3>
-              <div className="space-y-2 mb-4">
-                {chat.map((m, i) => (
-                  <div
-                    key={i}
-                    className={m.sender_id === human.id ? 'text-right' : 'text-left'}
-                  >
-                    <span
-                      className={`inline-block p-2 rounded ${
-                        m.sender_id === human.id
-                          ? 'bg-blue-500 text-white'
-                          : 'bg-gray-300 text-black'
-                      }`}
-                    >
-                      {m.content}
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex mb-4">
-                <input
-                  type="text"
-                  className="flex-1 border p-2 rounded"
-                  value={msgContent}
-                  onChange={e => setMsgContent(e.target.value)}
-                  disabled={msgTokens <= 0}
-                  placeholder={
-                    msgTokens > 0 ? 'Type a message…' : 'Waiting for tokens…'
-                  }
-                />
-                <button
-                  onClick={sendMessage}
-                  disabled={msgTokens <= 0}
-                  className="ml-2 px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
-                >
-                  Send
-                </button>
-              </div>
-
-              <button
-                onClick={() => attack(selectedAI.id)}
-                disabled={atkTokens <= 0}
-                className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50"
-              >
-                Attack {selectedAI.name}
-              </button>
-            </>
-          ) : (
-            <div className="text-center text-gray-500">
-              Select a cultist to chat
+      <div className="flex h-screen bg-gray-50">
+        {/* Sidebar */}
+        <aside className="w-72 bg-white shadow-lg p-4 flex flex-col">
+          <h2 className="text-2xl font-bold mb-4">Cultists</h2>
+          <ScrollArea className="flex-1 mb-4">
+            <ul>
+              {ais.map(ai => (
+                <Card key={ai.id} className={`mb-2 cursor-pointer hover:bg-blue-50 ${selectedAI?.id===ai.id?'ring-2 ring-blue-500':'ring-1 ring-gray-200'}`} onClick={()=>selectAI(ai)}>
+                  <CardContent className="flex justify-between items-center">
+                    <span className="font-medium">{ai.name}</span>
+                    <div className="flex items-center space-x-2">
+                      <Badge variant="secondary">{ai.health} HP</Badge>
+                      {unreadCounts[ai.id]>0 && <Badge variant="destructive">{unreadCounts[ai.id]}</Badge>}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </ul>
+          </ScrollArea>
+          <div className="space-y-1">
+            <div className="flex justify-between"><span>Msg Tokens</span><span>{msgTokens}</span></div>
+            <div className="h-2 bg-gray-200 rounded overflow-hidden">
+              <div className="bg-blue-500 h-full" style={{ width:`${100-((msgCountdown/30)*100)}%` }} />
             </div>
-          )}
-        </section>
-      </main>
-    </div>
+            <div className="flex justify-between"><span>Atk Tokens</span><span>{atkTokens}</span></div>
+            <div className="h-2 bg-gray-200 rounded overflow-hidden">
+              <div className="bg-red-500 h-full" style={{ width:`${100-((atkCountdown/60)*100)}%` }} />
+            </div>
+          </div>
+        </aside>
+
+        {/* Chat & Action Area */}
+        <main className="flex-1 flex flex-col">
+          <header className="bg-white shadow p-6 flex justify-between items-center">
+            <h1 className="text-3xl font-bold">Cult Chat Duel</h1>
+            <div className="flex items-center space-x-3">
+              <Sword className="text-red-500" />
+              <span className="text-lg font-semibold">You: {human.health} HP</span>
+            </div>
+          </header>
+          <div className="flex-1 flex overflow-hidden">
+            {/* Chat Panel */}
+            <section className="flex-1 p-6 flex flex-col bg-white">
+              {selectedAI ? (
+                <>
+                  <div className="flex-1 overflow-y-auto mb-4 space-y-4">
+                    {chat.map((m,i)=>(
+                      <div key={i} className={`flex ${m.sender_id===human.id?'justify-end':'justify-start'}`}>
+                        <div className={`max-w-xs p-3 rounded-lg ${m.sender_id===human.id?'bg-blue-600 text-white':'bg-gray-200 text-gray-800'}`}>
+                          {m.content}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex space-x-3">
+                    <Input
+                      placeholder="Type message..."
+                      value={msgContent}
+                      onChange={e=>setMsgContent(e.target.value)}
+                      className="flex-1"
+                      disabled={msgTokens<=0}
+                    />
+                    <Button disabled={msgTokens<=0} onClick={sendMessage}>
+                      <MessageSquare className="mr-2" /> Send
+                    </Button>
+                    <Button variant="destructive" disabled={atkTokens<=0} onClick={()=>attack(selectedAI.id)}>
+                      <ArrowRight className="mr-2" /> Attack
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 flex items-center justify-center text-gray-400 text-xl">
+                  Select a cultist to begin
+                </div>
+              )}
+            </section>
+          </div>
+        </main>
+      </div>
   );
 }
