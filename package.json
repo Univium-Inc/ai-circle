@@ -12,7 +12,6 @@
     "react-dom": "latest",
     "@supabase/supabase-js": "^2.0.0",
     "openai": "^4.0.0",
-    "shadcn/ui": "^1.0.0",
     "lucide-react": "^0.257.0"
   }
 }
