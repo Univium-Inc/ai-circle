@@ -6,8 +6,8 @@ export default function Home() {
   const [messages, setMessages] = useState([]);
   const [selectedAI, setSelectedAI] = useState(null);
   const [msgContent, setMsgContent] = useState('');
-  const [msgTokenReady, setMsgTokenReady] = useState(false);
-  const [atkTokenReady, setAtkTokenReady] = useState(false);
+  const [msgTokens, setMsgTokens] = useState(1);
+  const [atkTokens, setAtkTokens] = useState(1);
   const [msgCountdown, setMsgCountdown] = useState(30);
   const [atkCountdown, setAtkCountdown] = useState(60);
 
@@ -25,45 +25,48 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
-  // Token logic
+  // Token accumulation logic
   useEffect(() => {
-    let lastMsgTime = Date.now();
-    let lastAtkTime = Date.now();
-    setMsgTokenReady(true);
-    setAtkTokenReady(true);
     const timer = setInterval(() => {
-      const now = Date.now();
-      const msgDiff = Math.floor((now - lastMsgTime) / 1000);
-      const atkDiff = Math.floor((now - lastAtkTime) / 1000);
-      setMsgCountdown(30 - (msgDiff % 30));
-      setAtkCountdown(60 - (atkDiff % 60));
-      setMsgTokenReady(msgDiff >= 30);
-      setAtkTokenReady(atkDiff >= 60);
-      if (msgDiff >= 30) lastMsgTime = now;
-      if (atkDiff >= 60) lastAtkTime = now;
+      // Message token countdown
+      setMsgCountdown(prev => {
+        if (prev <= 1) {
+          setMsgTokens(tokens => tokens + 1);
+          return 30;
+        }
+        return prev - 1;
+      });
+      // Attack token countdown
+      setAtkCountdown(prev => {
+        if (prev <= 1) {
+          setAtkTokens(tokens => tokens + 1);
+          return 60;
+        }
+        return prev - 1;
+      });
     }, 1000);
     return () => clearInterval(timer);
   }, []);
 
   const sendMessage = async () => {
-    if (!selectedAI || !msgTokenReady) return;
+    if (!selectedAI || msgTokens <= 0) return;
     await fetch('/api/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sender_id: 1, recipient_id: selectedAI.id, content: msgContent })
     });
     setMsgContent('');
-    setMsgTokenReady(false);
+    setMsgTokens(tokens => tokens - 1);
   };
 
   const attack = async (targetId) => {
-    if (!atkTokenReady) return;
+    if (atkTokens <= 0) return;
     await fetch('/api/attack', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_id: targetId })
     });
-    setAtkTokenReady(false);
+    setAtkTokens(tokens => tokens - 1);
   };
 
   const ais = players.filter(p => !p.is_human);
@@ -76,9 +79,9 @@ export default function Home() {
   return (
     <div className="flex h-screen">
       {/* Sidebar */}
-      <aside className="w-1/4 bg-gray-800 text-white p-4">
+      <aside className="w-1/4 bg-gray-800 text-white p-4 flex flex-col">
         <h2 className="text-xl mb-4">AI Cultists</h2>
-        <ul>
+        <ul className="flex-1 overflow-y-auto">
           {ais.map(ai => (
             <li key={ai.id} className={`p-2 mb-2 rounded cursor-pointer ${selectedAI?.id === ai.id ? 'bg-gray-700' : 'bg-gray-600'}`}
                 onClick={() => setSelectedAI(ai)}>
@@ -86,9 +89,9 @@ export default function Home() {
             </li>
           ))}
         </ul>
-        <div className="mt-auto">
-          <div>Msg Token: {msgTokenReady ? 'Ready' : `${msgCountdown}s`}</div>
-          <div>Atk Token: {atkTokenReady ? 'Ready' : `${atkCountdown}s`}</div>
+        <div className="mt-4">
+          <div>Msg Tokens: {msgTokens} (next in {msgCountdown}s)</div>
+          <div>Atk Tokens: {atkTokens} (next in {atkCountdown}s)</div>
         </div>
       </aside>
       {/* Main */}
@@ -103,7 +106,7 @@ export default function Home() {
           {selectedAI ? (
             <>
               <h3 className="text-xl mb-2">Chat with {selectedAI.name}</h3>
-              <div className="space-y-2">
+              <div className="space-y-2 mb-4">
                 {chat.map((m, i) => (
                   <div key={i} className={`${m.sender_id === human.id ? 'text-right' : 'text-left'}`}>
                     <span className={`inline-block p-2 rounded ${m.sender_id === human.id ? 'bg-blue-500 text-white' : 'bg-gray-300 text-black'}`}>
@@ -112,31 +115,29 @@ export default function Home() {
                   </div>
                 ))}
               </div>
-              <div className="mt-4 flex">
+              <div className="flex mb-4">
                 <input
                   className="flex-1 border p-2 rounded"
                   value={msgContent}
                   onChange={e => setMsgContent(e.target.value)}
-                  disabled={!msgTokenReady}
-                  placeholder="Type a message..."
+                  disabled={msgTokens <= 0}
+                  placeholder={msgTokens > 0 ? "Type a message..." : "Waiting for tokens..."}
                 />
                 <button
                   className="ml-2 px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
                   onClick={sendMessage}
-                  disabled={!msgTokenReady}
+                  disabled={msgTokens <= 0}
                 >
                   Send
                 </button>
               </div>
-              <div className="mt-4">
-                <button
-                  className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50"
+              <button
+                className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50"
                   onClick={() => attack(selectedAI.id)}
-                  disabled={!atkTokenReady}
+                  disabled={atkTokens <= 0}
                 >
                   Attack {selectedAI.name}
-                </button>
-              </div>
+              </button>
             </>
           ) : (
             <div className="text-center text-gray-500">Select an AI to chat</div>

@@ -1,6 +1,9 @@
--- Run this in Supabase SQL
+-- Drop existing tables
+drop table if exists messages cascade;
+drop table if exists players cascade;
 
-create table if not exists players (
+-- Create tables again
+create table players (
   id serial primary key,
   name text not null,
   is_human boolean not null default false,
@@ -9,7 +12,7 @@ create table if not exists players (
   last_attack timestamp with time zone not null default now()
 );
 
-create table if not exists messages (
+create table messages (
   id serial primary key,
   sender_id int references players(id),
   recipient_id int references players(id),
@@ -17,7 +20,7 @@ create table if not exists messages (
   created_at timestamp with time zone default now()
 );
 
--- Initial data
+-- Seed initial data (1 human + 7 AIs)
 insert into players (name, is_human) values
 ('You', true),
 ('AI Cultist 1', false),
@@ -26,5 +29,4 @@ insert into players (name, is_human) values
 ('AI Cultist 4', false),
 ('AI Cultist 5', false),
 ('AI Cultist 6', false),
-('AI Cultist 7', false)
-on conflict do nothing;
+('AI Cultist 7', false);
