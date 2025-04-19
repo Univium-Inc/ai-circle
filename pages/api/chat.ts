@@ -25,7 +25,7 @@ NEVER add extra lines.
     };
 
     const completion = await openai.chat.completions.create({
-      model   : 'gpt-3.5-turbo',
+      model: 'gpt-4o',  // Change from 'gpt-3.5-turbo' to 'gpt-4o'
       messages: [forcedFormat, ...messages].slice(-30),
     });
 
