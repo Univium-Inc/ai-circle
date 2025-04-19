@@ -1,25 +1,29 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { Configuration, OpenAIApi } from 'openai';
+import OpenAI from 'openai';
 
-const configuration = new Configuration({
+// create client with key from env
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
-const openai = new OpenAIApi(configuration);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { messages } = req.body;
-
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   try {
-    const completion = await openai.createChatCompletion({
+    const { messages } = req.body; // array in OpenAI chat format
+
+    const completion = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages,
     });
 
-    const reply = completion.data.choices[0].message?.content || '...';
+    const reply = completion.choices[0]?.message?.content ?? '...';
+    const target = req.body.target ?? null; // optional passthrough
 
-    res.status(200).json({ reply });
-  } catch (error) {
-    console.error('OpenAI Error:', error);
-    res.status(500).json({ error: 'OpenAI API call failed' });
+    res.status(200).json({ reply, target });
+  } catch (err) {
+    console.error('OpenAI error', err);
+    res.status(500).json({ error: 'OpenAI request failed' });
   }
 }
