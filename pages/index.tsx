@@ -94,8 +94,9 @@ export default function Home() {
     // Don't proceed if AI has no tokens or we're already processing
     if (tokens[ai] <= 0 || isProcessing) return;
     
-    // Check if this AI has unread messages
-    const aiHasMessages = messages.some(m => 
+    // For AI 2, we'll allow it to initiate a message even if it hasn't received any
+    // For AI 1, we'll keep the original behavior (only respond to messages)
+    const aiHasMessages = ai === 'AI 2' || messages.some(m => 
       m.recipient === ai && 
       !messages.some(r => r.sender === ai && r.timestamp > m.timestamp)
     );
@@ -155,7 +156,7 @@ export default function Home() {
   const checkAndProcessAI = async () => {
     if (isProcessing) return;
     
-    // Check AI 1 first
+    // Check AI 1 first - only if it has unread messages
     const ai1HasUnreadMessages = messages.some(m => 
       m.recipient === 'AI 1' && 
       !messages.some(r => r.sender === 'AI 1' && r.timestamp > m.timestamp)
@@ -166,13 +167,18 @@ export default function Home() {
       return; // Only process one AI at a time
     }
     
-    // Then check AI 2
-    const ai2HasUnreadMessages = messages.some(m => 
-      m.recipient === 'AI 2' && 
-      !messages.some(r => r.sender === 'AI 2' && r.timestamp > m.timestamp)
-    );
+    // For AI 2, we'll process it even if it hasn't received messages
+    // We just need to check if it has tokens and if it should send a message
+    const ai2ShouldSendMessage = 
+      // Either it has unread messages
+      messages.some(m => 
+        m.recipient === 'AI 2' && 
+        !messages.some(r => r.sender === 'AI 2' && r.timestamp > m.timestamp)
+      ) ||
+      // Or there are messages in the system but none from AI 2 yet
+      (messages.length > 0 && !messages.some(m => m.sender === 'AI 2'));
     
-    if (tokens['AI 2'] > 0 && ai2HasUnreadMessages) {
+    if (tokens['AI 2'] > 0 && ai2ShouldSendMessage) {
       await processAIResponse('AI 2');
     }
   };
