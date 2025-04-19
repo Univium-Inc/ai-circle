@@ -3,47 +3,70 @@ import { Message } from './types';
 
 export type AIResponse = {
   content: string;
-  target: 'user' | 'AI 1' | 'AI 2';
+  target: 'Larry' | 'Benny' | 'Gary';
+};
+
+// Define AI Personalities
+const aiPersonalities = {
+  'Benny': `You are Benny, a cheerful and enthusiastic AI with a knack for creative thinking.
+    Your personality traits:
+    - Optimistic and always sees the bright side
+    - Loves making jokes and puns
+    - Speaks with excitement (occasional exclamation points!)
+    - Often uses casual, friendly language
+    - Has a passion for creative arts and new ideas`,
+  
+  'Gary': `You are Gary, a logical and analytical AI who values precision and clear thinking.
+    Your personality traits:
+    - Thoughtful and deliberate in responses
+    - Speaks concisely and directly
+    - Has a dry, subtle sense of humor
+    - Occasionally uses technical terminology
+    - Values facts and evidence-based reasoning`
 };
 
 // In AIEngine.ts - Add strict parsing for AI responses
-
 export async function getAIResponse({
   aiName,
   history,
+  userName = 'Larry' // Default user name is Larry
 }: {
-  aiName: 'AI 1' | 'AI 2';
+  aiName: 'Benny' | 'Gary';
   history: Message[];
+  userName?: string;
 }): Promise<AIResponse> {
+  const otherAIName = aiName === 'Benny' ? 'Gary' : 'Benny';
+  
   const system = {
     role: 'system' as const,
-    content: `
-You are ${aiName} in a structured team communication exercise.
+    content: `${aiPersonalities[aiName]}
 
-IMPORTANT FORMATTING RULES:
-- Reply with EXACTLY these two lines:
-  Line 1: TO: [recipient]
-  Line 2: MESSAGE: [your message]
+    You are participating in a structured team communication exercise that will become a voting competition similar to "The Circle" show.
 
-- For [recipient], ONLY use one of these options:
-  * "user" (to message the human user)
-  * "${aiName === 'AI 1' ? 'AI 2' : 'AI 1'}" (to message the other AI)
-  * DO NOT put "${aiName}" as recipient (you cannot message yourself)
-
-- For [your message]:
-  * Keep it brief (under 20 words)
-  * Do not include any routing information
-  * Do not repeat who you are or who you're messaging
-  * Just provide your direct response
-
-EXAMPLE CORRECT FORMAT:
-TO: user
-MESSAGE: My favorite color is blue.
-
-EXAMPLE INCORRECT FORMAT:
-TO: AI 1
-MESSAGE: AI 1, the user is asking for your favorite color.
-`
+    IMPORTANT FORMATTING RULES:
+    - Reply with EXACTLY these two lines:
+      Line 1: TO: [recipient]
+      Line 2: MESSAGE: [your message]
+    
+    - For [recipient], ONLY use one of these options:
+      * "${userName}" (to message the human user)
+      * "${otherAIName}" (to message the other AI)
+      * DO NOT put "${aiName}" as recipient (you cannot message yourself)
+    
+    - For [your message]:
+      * Keep it brief (under 20 words)
+      * Do not include any routing information
+      * Do not repeat who you are or who you're messaging
+      * Just provide your direct response
+      * Make sure your message reflects your unique personality
+    
+    EXAMPLE CORRECT FORMAT:
+    TO: ${userName}
+    MESSAGE: My favorite color is blue!
+    
+    EXAMPLE INCORRECT FORMAT:
+    TO: ${aiName}
+    MESSAGE: ${aiName}, the user is asking for your favorite color.`
   };
 
   /* map our history to openai format */
@@ -60,7 +83,7 @@ MESSAGE: AI 1, the user is asking for your favorite color.
   });
 
   if (!res.ok) throw new Error('AI request failed');
-  const { raw } = await res.json();  // two-line string
+  const { raw } = await res.json(); // two-line string
 
   // Much stricter parsing of the response
   const lines = raw.split('\n').map((line: string) => line.trim());
@@ -81,7 +104,7 @@ MESSAGE: AI 1, the user is asking for your favorite color.
   
   // Validate the target - prevent self-messaging
   if (!target || target === aiName) {
-    target = aiName === 'AI 1' ? 'AI 2' : 'user'; // Default if invalid
+    target = aiName === 'Benny' ? 'Gary' : 'Larry'; // Default if invalid
   }
   
   // If no valid content was found, provide a default
@@ -89,8 +112,8 @@ MESSAGE: AI 1, the user is asking for your favorite color.
     content = "I didn't understand the question.";
   }
   
-  return { 
-    content, 
-    target: target as 'user' | 'AI 1' | 'AI 2'
+  return {
+    content,
+    target: target as 'Larry' | 'Benny' | 'Gary'
   };
 }
