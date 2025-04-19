@@ -1,121 +1,119 @@
-import { useState, useEffect, useRef } from 'react';
-import { Input } from '@/components/ui/input';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { getAIResponse } from '@/lib/AIEngine';
+import { SECRET_WORDS } from '@/lib/secretWords';
+import { Message } from '@/lib/types';
 
-type Message = {
-  role: 'user' | 'assistant';
-  content: string;
+type ChatBoxProps = {
+  name: string;
+  messages: Message[];
+  input: string;
+  onInputChange: (value: string) => void;
+  onSend: () => void;
 };
 
-function ChatPanel({
-  aiId,
-  messages,
-  setMessages,
-}: {
-  aiId: string;
-  messages: Message[];
-  setMessages: (msgs: Message[]) => void;
-}) {
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
+const ChatBox = ({ name, messages, input, onInputChange, onSend }: ChatBoxProps) => (
+  <div className='flex flex-col w-full max-w-md bg-white shadow rounded p-4 h-[600px]'>
+    <div className='flex-1 overflow-y-auto space-y-2 mb-2'>
+      {messages.map((msg, idx) => (
+        <div key={idx} className='p-2 rounded bg-gray-100'>
+          <strong>{msg.sender} ➜ {msg.recipient}:</strong> {msg.content}
+        </div>
+      ))}
+    </div>
+    <div className='flex gap-2'>
+      <Input
+        value={input}
+        onChange={(e) => onInputChange(e.target.value)}
+        placeholder={`Message from ${name}...`}
+        className='flex-1'
+      />
+      <Button onClick={onSend}>Send</Button>
+    </div>
+  </div>
+);
 
-  useEffect(() => {
-    localStorage.setItem(`chatMessages-${aiId}`, JSON.stringify(messages));
-  }, [messages, aiId]);
+export default function Home() {
+  const [ai1Messages, setAI1Messages] = useState<Message[]>([]);
+  const [ai2Messages, setAI2Messages] = useState<Message[]>([]);
+  const [monitorLog, setMonitorLog] = useState<Message[]>([]);
+  const [userInput, setUserInput] = useState('');
+  const [userMessages, setUserMessages] = useState<Message[]>([]);
+  const [tokens, setTokens] = useState({ user: 1, 'AI 1': 0, 'AI 2': 0 });
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  const [secrets] = useState({
+    user: SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
+    'AI 1': SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
+    'AI 2': SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
+  });
 
-  const sendMessage = async () => {
-    if (!input.trim()) return;
+  const sendUserMessage = () => {
+    if (!userInput || tokens.user <= 0) return;
 
-    const userMessage: Message = { role: 'user', content: input };
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
-    setInput('');
-    setLoading(true);
+    const msg: Message = {
+      sender: 'user',
+      recipient: 'AI 1',
+      content: userInput,
+      timestamp: Date.now(),
+    };
 
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages }),
-      });
-
-      const data = await res.json();
-      const replyMessage: Message = {
-        role: 'assistant',
-        content: data.reply ?? 'No response',
-      };
-
-      setMessages([...newMessages, replyMessage]);
-    } catch (err) {
-      console.error(err);
-      setMessages([
-        ...newMessages,
-        { role: 'assistant', content: 'Error talking to AI.' },
-      ]);
-    } finally {
-      setLoading(false);
-    }
+    setUserMessages((prev) => [...prev.slice(-19), msg]);
+    setAI1Messages((prev) => [...prev.slice(-19), msg]);
+    setTokens((prev) => ({ ...prev, user: prev.user - 1 }));
+    setUserInput('');
   };
 
-  return (
-    <div className="flex flex-col bg-white p-4 rounded-xl shadow-md w-full max-w-md h-[600px]">
-      <div className="flex-1 overflow-y-auto space-y-2 mb-4">
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`p-2 rounded ${
-              msg.role === 'user' ? 'bg-blue-100' : 'bg-gray-100'
-            }`}
-          >
-            <strong>{msg.role === 'user' ? 'You' : aiId}:</strong>{' '}
-            {msg.content}
-          </div>
-        ))}
-        <div ref={chatEndRef} />
-      </div>
-      <div className="flex gap-2">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={`Ask ${aiId}...`}
-          className="flex-1"
-          onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-        />
-        <Button onClick={sendMessage} disabled={loading}>
-          {loading ? '...' : 'Send'}
-        </Button>
-      </div>
-    </div>
-  );
-}
+  const aiThink = (aiName: 'AI 1' | 'AI 2') => {
+    if (tokens[aiName] <= 0) return;
 
-export default function DualChat() {
-  const [ai1Messages, setAi1Messages] = useState<Message[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('chatMessages-ai1');
-      return saved ? JSON.parse(saved) : [];
-    }
-    return [];
-  });
+    const selfHistory = aiName === 'AI 1' ? ai1Messages : ai2Messages;
+    const secret = secrets[aiName];
+    const { content, target } = getAIResponse({ aiName, secretWord: secret, history: selfHistory });
 
-  const [ai2Messages, setAi2Messages] = useState<Message[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('chatMessages-ai2');
-      return saved ? JSON.parse(saved) : [];
+    const msg: Message = {
+      sender: aiName,
+      recipient: target,
+      content,
+      timestamp: Date.now(),
+    };
+
+    if (target === 'user') {
+      setUserMessages((prev) => [...prev.slice(-19), msg]);
+      if (aiName === 'AI 1') setAI1Messages((prev) => [...prev.slice(-19), msg]);
+      else setAI2Messages((prev) => [...prev.slice(-19), msg]);
+    } else {
+      setMonitorLog((prev) => [...prev.slice(-19), msg]);
     }
-    return [];
-  });
+
+    setTokens((prev) => ({ ...prev, [aiName]: prev[aiName] - 1 }));
+  };
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTokens({ user: 1, 'AI 1': 1, 'AI 2': 1 });
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (tokens['AI 1'] > 0) aiThink('AI 1');
+    if (tokens['AI 2'] > 0) aiThink('AI 2');
+  }, [tokens]);
 
   return (
-    <div className="min-h-screen p-6 bg-gray-100 flex flex-col items-center justify-center">
-      <div className="flex gap-6 flex-col md:flex-row">
-        <ChatPanel aiId="AI 1" messages={ai1Messages} setMessages={setAi1Messages} />
-        <ChatPanel aiId="AI 2" messages={ai2Messages} setMessages={setAi2Messages} />
+    <div className='min-h-screen bg-gray-100 p-6 space-y-6'>
+      <div className='flex gap-4 flex-col md:flex-row justify-center'>
+        <ChatBox name='User' messages={userMessages} input={userInput} onInputChange={setUserInput} onSend={sendUserMessage} />
+        <div className='w-full max-w-md bg-white shadow rounded p-4 h-[600px] overflow-y-auto'>
+          <h2 className='text-lg font-bold mb-2'>AI Monitor Log</h2>
+          {monitorLog.map((m, i) => (
+            <div key={i} className='p-2 text-sm bg-yellow-50 rounded'>
+              <strong>{m.sender} ➜ {m.recipient}:</strong> {m.content}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
