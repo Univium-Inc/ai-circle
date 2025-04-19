@@ -1,21 +1,54 @@
 import { Message } from './types';
 
+/* -------------------------------------------------
+   Very‑simple “AI” logic for local dev / demo.
+   – Looks at the most‑recent message sent *to* it
+   – Decides who to answer (user vs. other AI)
+   – Crafts a playful reply while hiding its secret
+   ------------------------------------------------- */
+
+export type AIResponse = {
+  content: string;
+  target: 'user' | 'AI 1' | 'AI 2';
+};
+
 export function getAIResponse({
   aiName,
   secretWord,
-  history,
+  history,        // last‑20 + unread queue (provided by index.tsx)
 }: {
-  aiName: string;
+  aiName: 'AI 1' | 'AI 2';
   secretWord: string;
   history: Message[];
-}): { content: string; target: 'user' | 'AI 1' | 'AI 2' } {
-  const recipient = Math.random() < 0.5 ? 'user' : aiName === 'AI 1' ? 'AI 2' : 'AI 1';
-  const context = history.map(m => `${m.role === 'user' ? 'User' : 'Other'}: ${m.content}`).join('\n');
+}): AIResponse {
+  /* most‑recent message addressed TO this AI */
+  const lastIncoming = [...history]
+    .reverse()
+    .find((m) => m.recipient === aiName);
 
-  const message = `Hey ${recipient}, just thinking about something that rhymes with... nothing important 😉`;
+  const otherAI: 'AI 1' | 'AI 2' = aiName === 'AI 1' ? 'AI 2' : 'AI 1';
 
-  return {
-    content: message,
-    target: recipient as 'user' | 'AI 1' | 'AI 2',
-  };
+  let target: 'user' | 'AI 1' | 'AI 2';
+  let content: string;
+
+  if (lastIncoming) {
+    /* Reply directly to whoever just spoke */
+    target = lastIncoming.sender as 'user' | 'AI 1' | 'AI 2';
+
+    if (target === 'user') {
+      /* Respond to the user */
+      content = `You said: “${lastIncoming.content}”. Interesting! What makes you curious about that? 😊`;
+    } else {
+      /* Respond to the other AI */
+      content = `Hey ${otherAI}, that’s an intriguing thought. Care to elaborate? 😉`;
+    }
+  } else {
+    /* No new messages — idle chatter toward the other AI */
+    target   = otherAI;
+    content  = `Hi ${otherAI}, just thinking about something that rhymes with… nothing useful. 🤫`;
+  }
+
+  /* Never leak the secret word, but maybe hint at guessing theirs later */
+
+  return { content, target };
 }
