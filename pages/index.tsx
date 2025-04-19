@@ -128,6 +128,115 @@ export default function Home() {
     setUserToAi2('');
   };
 
+
+  // Add this function to the Home component to handle sequential AI processing
+const processTurn = async () => {
+  // Don't process if already processing
+  if (isProcessing) return;
+  
+  setIsProcessing(true);
+  
+  try {
+    // First process AI 1 if it has tokens
+    if (tokens['AI 1'] > 0) {
+      // Check if AI 1 has any unread messages to respond to
+      const ai1HasMessages = messages.some(m => 
+        m.recipient === 'AI 1' && 
+        !messages.some(r => r.sender === 'AI 1' && r.timestamp > m.timestamp)
+      );
+      
+      if (ai1HasMessages) {
+        console.log("AI 1 processing with token:", tokens['AI 1']);
+        
+        // Process AI 1's response
+        const aiHistory = messages.filter(
+          m => m.sender === 'AI 1' || m.recipient === 'AI 1'
+        ).slice(-20);
+        
+        // Deduct token immediately
+        setTokens(prev => ({
+          ...prev,
+          'AI 1': prev['AI 1'] - 1
+        }));
+        
+        // Short delay to ensure state update completes
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
+        // Get AI response
+        const { content, target } = await getAIResponse({
+          aiName: 'AI 1',
+          history: aiHistory
+        });
+        
+        // Add the message
+        const newMessage: Message = {
+          sender: 'AI 1',
+          recipient: target,
+          content: content.trim(),
+          timestamp: Date.now(),
+          isPrivate: target !== 'user'
+        };
+        
+        setMessages(prev => [...prev, newMessage]);
+        
+        // Short delay before continuing
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    // Then process AI 2 if it has tokens - this can respond to new AI 1 messages
+    if (tokens['AI 2'] > 0) {
+      // Get fresh message list including any new AI 1 messages
+      const currentMessages = [...messages];
+      
+      // Check if AI 2 has any unread messages
+      const ai2HasMessages = currentMessages.some(m => 
+        m.recipient === 'AI 2' && 
+        !currentMessages.some(r => r.sender === 'AI 2' && r.timestamp > m.timestamp)
+      );
+      
+      if (ai2HasMessages) {
+        console.log("AI 2 processing with token:", tokens['AI 2']);
+        
+        // Process AI 2's response
+        const aiHistory = currentMessages.filter(
+          m => m.sender === 'AI 2' || m.recipient === 'AI 2'
+        ).slice(-20);
+        
+        // Deduct token immediately
+        setTokens(prev => ({
+          ...prev,
+          'AI 2': prev['AI 2'] - 1
+        }));
+        
+        // Short delay to ensure state update completes
+        await new Promise(resolve => setTimeout(resolve, 50));
+        
+        // Get AI response
+        const { content, target } = await getAIResponse({
+          aiName: 'AI 2',
+          history: aiHistory
+        });
+        
+        // Add the message
+        const newMessage: Message = {
+          sender: 'AI 2',
+          recipient: target,
+          content: content.trim(),
+          timestamp: Date.now(),
+          isPrivate: target !== 'user'
+        };
+        
+        setMessages(prev => [...prev, newMessage]);
+      }
+    }
+  } catch (error) {
+    console.error("Error processing turn:", error);
+  } finally {
+    setIsProcessing(false);
+  }
+};
+
   // Process AI turn
   // Modify the processAITurn function in pages/index.tsx
   const processAITurn = async (ai: 'AI 1' | 'AI 2') => {
@@ -189,6 +298,7 @@ export default function Home() {
   };
 
   // Turn timer effect
+  // Replace your current token timer useEffect with this
   useEffect(() => {
     // Grant 1 token each turn and add to existing tokens
     const turnInterval = setInterval(() => {
@@ -198,6 +308,9 @@ export default function Home() {
         'AI 2': prev['AI 2'] + 1
       }));
       setTurnTimer(30);
+      
+      // Process the new turn after tokens are refreshed
+      setTimeout(() => processTurn(), 100);
     }, 30000);
     
     // Countdown timer
