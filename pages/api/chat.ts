@@ -71,7 +71,6 @@ export default async function handler(
     
     Rules for [your message]:
     - Keep it brief and concise (under 20 words)
-    - Answer directly without mentioning routing information
     - Do not repeat the recipient's name in your message
     - Do not include any additional formatting or metadata
     - Make sure your message reflects your unique personality
