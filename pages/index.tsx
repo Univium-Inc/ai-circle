@@ -1,106 +1,109 @@
-// pages/index.tsx - updated with message visibility
+// pages/index.tsx - updated with collapsible chats and multiple AIs
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { getAIResponse } from '@/lib/AIEngine';
-import { Message, MessageVisibility } from '@/lib/types';
-
-/* ---------- reusable chat component ---------- */
-type ChatBoxProps = {
-  title: string;
-  messages: Message[];
-  input: string;
-  onInputChange: (v: string) => void;
-  onSend: () => void;
-  canSend: boolean;
-  personality?: string;
-};
-
-const ChatBox = ({
-  title,
-  messages,
-  input,
-  onInputChange,
-  onSend,
-  canSend,
-  personality,
-}: ChatBoxProps) => (
-  <div className="flex flex-col w-full max-w-md bg-white shadow rounded p-4 h-[600px]">
-    <h2 className="font-semibold mb-2">{title}</h2>
-    {personality && (
-      <div className="text-xs text-gray-500 mb-2 italic">
-        {personality}
-      </div>
-    )}
-    <div className="flex-1 overflow-y-auto space-y-2 mb-2">
-      {messages.map((m, i) => {
-        // Rendering message with appropriate styling based on visibility
-        return (
-          <div 
-            key={i} 
-            className={`p-2 rounded text-sm ${
-              m.visibility === 'highlighted' 
-                ? 'bg-yellow-100 border border-yellow-300' 
-                : 'bg-gray-100'
-            }`}
-          >
-            <strong>{m.sender} → {m.recipient}:</strong> {m.content}
-          </div>
-        );
-      })}
-    </div>
-    <div className="flex gap-2">
-      <Input
-        value={input}
-        onChange={(e: { target: { value: string; }; }) => onInputChange(e.target.value)}
-        placeholder={`Message to ${title.split(' ')[2]}…`}
-        className="flex-1"
-        onKeyDown={(e: { key: string; }) => canSend && e.key === 'Enter' && onSend()}
-        disabled={!canSend}
-      />
-      <Button onClick={onSend} disabled={!canSend}>Send</Button>
-    </div>
-  </div>
-);
+import { Message, MessageVisibility, Participant, ChatState } from '@/lib/types';
+import { AI_PERSONALITIES, getAllAINames } from '@/lib/aiPersonalities';
+import { CollapsibleChat } from '@/components/CollapsibleChat';
 
 /* ---------- main page ---------- */
 export default function Home() {
   // All messages in the system
   const [messages, setMessages] = useState<Message[]>([]);
   
-  // User inputs
-  const [userToBenny, setUserToBenny] = useState('');
-  const [userToGary, setUserToGary] = useState('');
+  // Get AI names
+  const aiNames = getAllAINames();
   
-  // AI Personalities
-  const aiPersonalities = {
-    'Benny': 'Cheerful and enthusiastic AI with a knack for creative thinking',
-    'Gary': 'Logical and analytical AI who values precision and clear thinking'
-  };
+  // User inputs and chat states for each AI
+  const [chatStates, setChatStates] = useState<Record<string, ChatState>>(() => {
+    // Initialize chat states for each AI
+    const initialStates: Record<string, ChatState> = {};
+    aiNames.forEach(name => {
+      initialStates[name] = {
+        expanded: false, // All chats start collapsed
+        input: ''
+      };
+    });
+    return initialStates;
+  });
+  
+  // Last seen message timestamps to track unread messages
+  const [lastSeen, setLastSeen] = useState<Record<string, number>>(() => {
+    const initial: Record<string, number> = {};
+    aiNames.forEach(name => {
+      initial[name] = 0;
+    });
+    return initial;
+  });
+  
+  // Track which chat is currently expanded
+  const [expandedChat, setExpandedChat] = useState<string | null>(null);
   
   // Tokens - everyone starts with 1
-  const [tokens, setTokens] = useState({
-    Larry: 1,
-    'Benny': 1,
-    'Gary': 1
+  const [tokens, setTokens] = useState<Record<Participant, number>>(() => {
+    const initial: Partial<Record<Participant, number>> = {
+      Larry: 1
+    };
+    
+    // Add tokens for all AIs
+    aiNames.forEach(name => {
+      initial[name as Participant] = 1;
+    });
+    
+    return initial as Record<Participant, number>;
   });
   
   const [turnTimer, setTurnTimer] = useState(30);
   const [isProcessing, setIsProcessing] = useState(false);
   const [turnInProgress, setTurnInProgress] = useState(false);
   
-  // Get filtered messages for each chat view
-  const getUserToBennyMessages = () => {
-    return messages.filter(
-      m => (m.sender === 'Larry' && m.recipient === 'Benny') ||
-           (m.sender === 'Benny' && m.recipient === 'Larry')
-    );
+  // Function to toggle chat expansion
+  const toggleChatExpansion = (aiName: string) => {
+    // If this chat is already expanded, collapse it
+    if (expandedChat === aiName) {
+      setExpandedChat(null);
+      setChatStates(prev => ({
+        ...prev,
+        [aiName]: {
+          ...prev[aiName],
+          expanded: false
+        }
+      }));
+    } else {
+      // Collapse any currently expanded chat
+      if (expandedChat) {
+        setChatStates(prev => ({
+          ...prev,
+          [expandedChat]: {
+            ...prev[expandedChat],
+            expanded: false
+          }
+        }));
+      }
+      
+      // Expand the clicked chat
+      setExpandedChat(aiName);
+      setChatStates(prev => ({
+        ...prev,
+        [aiName]: {
+          ...prev[aiName],
+          expanded: true
+        }
+      }));
+      
+      // Mark all messages as seen when expanding
+      setLastSeen(prev => ({
+        ...prev,
+        [aiName]: Date.now()
+      }));
+    }
   };
-
-  const getUserToGaryMessages = () => {
+  
+  // Get filtered messages for each chat view
+  const getUserToAIMessages = (aiName: string) => {
     return messages.filter(
-      m => (m.sender === 'Larry' && m.recipient === 'Gary') ||
-           (m.sender === 'Gary' && m.recipient === 'Larry')
+      m => (m.sender === 'Larry' && m.recipient === aiName) ||
+           (m.sender === aiName && m.recipient === 'Larry')
     );
   };
 
@@ -109,11 +112,21 @@ export default function Home() {
       m => m.sender !== 'Larry' && m.recipient !== 'Larry'
     );
   };
+  
+  // Count unread messages for an AI
+  const getUnreadCount = (aiName: string) => {
+    return messages.filter(
+      m => m.sender === aiName && 
+           m.recipient === 'Larry' && 
+           m.timestamp && 
+           m.timestamp > (lastSeen[aiName] || 0)
+    ).length;
+  };
 
   // Determine message visibility based on context
   const determineVisibility = (
-    sender: 'Larry' | 'Benny' | 'Gary', 
-    recipient: 'Larry' | 'Benny' | 'Gary',
+    sender: Participant, 
+    recipient: Participant,
     content: string
   ): MessageVisibility => {
     // Messages between AIs are private
@@ -132,7 +145,7 @@ export default function Home() {
   };
 
   // Process a single AI response, returns true if message sent, false otherwise
-  const processAIMessage = async (ai: 'Benny' | 'Gary') => {
+  const processAIMessage = async (ai: Exclude<Participant, 'Larry'>) => {
     // Don't proceed if AI has no tokens
     if (tokens[ai] <= 0) return false;
     
@@ -153,7 +166,7 @@ export default function Home() {
       });
       
       // Validate the target
-      const validTarget = target === 'Larry' || target === (ai === 'Benny' ? 'Gary' : 'Benny');
+      const validTarget = target === 'Larry' || (aiNames.includes(target) && target !== ai);
       const finalTarget = validTarget ? target : 'Larry'; // Default to user if invalid
       
       // Determine visibility of this message
@@ -192,22 +205,18 @@ export default function Home() {
     setTurnInProgress(true);
     
     try {
-      // Randomize processing order
-      const ais: ('Benny' | 'Gary')[] = Math.random() < 0.5 
-        ? ['Benny', 'Gary'] 
-        : ['Gary', 'Benny'];
+      // Randomize processing order of all AIs
+      const shuffledAIs = [...aiNames].sort(() => Math.random() - 0.5);
       
-      console.log(`Processing AIs in order: ${ais[0]}, then ${ais[1]}`);
+      console.log(`Processing AIs in order: ${shuffledAIs.join(', ')}`);
       
-      // Process first AI
-      const firstAISent = await processAIMessage(ais[0]);
-      
-      // Small delay between processing
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Process second AI
-      if (tokens[ais[1]] > 0) {
-        await processAIMessage(ais[1]);
+      // Process each AI in the random order
+      for (const ai of shuffledAIs) {
+        if (tokens[ai as Participant] > 0) {
+          await processAIMessage(ai as Exclude<Participant, 'Larry'>);
+          // Small delay between AIs
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
       }
     } finally {
       setTurnInProgress(false);
@@ -215,8 +224,8 @@ export default function Home() {
   };
 
   // Send message function for user
-  const sendMessage = (sender: 'Larry' | 'Benny' | 'Gary', recipient: 'Larry' | 'Benny' | 'Gary', content: string) => {
-    if (!content.trim() || tokens[sender as keyof typeof tokens] <= 0) return;
+  const sendMessage = (sender: Participant, recipient: Participant, content: string) => {
+    if (!content.trim() || tokens[sender] <= 0) return;
     
     // Determine message visibility
     const visibility = determineVisibility(sender, recipient, content.trim());
@@ -236,7 +245,7 @@ export default function Home() {
     // Deduct token
     setTokens(prev => ({
       ...prev,
-      [sender]: prev[sender as keyof typeof tokens] - 1
+      [sender]: prev[sender] - 1
     }));
     
     // If the user sent a message, trigger AI responses after a delay
@@ -248,27 +257,48 @@ export default function Home() {
   };
 
   // User send functions
-  const sendToBenny = () => {
-    if (tokens.Larry <= 0 || !userToBenny.trim()) return;
-    sendMessage('Larry', 'Benny', userToBenny);
-    setUserToBenny('');
+  const sendToAI = (aiName: string) => {
+    if (tokens.Larry <= 0 || !chatStates[aiName].input.trim()) return;
+    sendMessage('Larry', aiName as Participant, chatStates[aiName].input);
+    
+    // Clear input
+    setChatStates(prev => ({
+      ...prev,
+      [aiName]: {
+        ...prev[aiName],
+        input: ''
+      }
+    }));
   };
-
-  const sendToGary = () => {
-    if (tokens.Larry <= 0 || !userToGary.trim()) return;
-    sendMessage('Larry', 'Gary', userToGary);
-    setUserToGary('');
+  
+  // Handle input change
+  const handleInputChange = (aiName: string, value: string) => {
+    setChatStates(prev => ({
+      ...prev,
+      [aiName]: {
+        ...prev[aiName],
+        input: value
+      }
+    }));
   };
 
   // Turn timer effect - replenish tokens every 30 seconds
   useEffect(() => {
     // Grant 1 token to all participants every turn
     const turnInterval = setInterval(() => {
-      setTokens(prev => ({
-        Larry: prev.Larry + 1,
-        'Benny': prev['Benny'] + 1,
-        'Gary': prev['Gary'] + 1
-      }));
+      setTokens(prev => {
+        const newTokens = { ...prev };
+        
+        // Add token for the user
+        newTokens.Larry = prev.Larry + 1;
+        
+        // Add tokens for all AIs
+        aiNames.forEach(ai => {
+          newTokens[ai as Participant] = prev[ai as Participant] + 1;
+        });
+        
+        return newTokens;
+      });
       setTurnTimer(30);
       
       // Process AI turns after token refresh
@@ -294,45 +324,57 @@ export default function Home() {
       <div className="text-center text-sm text-gray-700">
         <h1 className="text-xl font-bold mb-2">The Circle: AI Edition</h1>
         ⏳ <strong>Next Turn In:</strong> {turnTimer}s<br/>
-        🎟 <strong>Tokens</strong> — Larry: {tokens.Larry} | Benny: {tokens['Benny']} | Gary: {tokens['Gary']}
+        🎟 <strong>Tokens</strong> — Larry: {tokens.Larry} | 
+        {aiNames.map(ai => (
+          <span key={ai}> {ai}: {tokens[ai as Participant]} |</span>
+        ))}
       </div>
 
-      {/* Chat boxes */}
-      <div className="flex gap-4 flex-col md:flex-row justify-center">
-        <ChatBox
-          title="Chat with Benny"
-          messages={getUserToBennyMessages()}
-          input={userToBenny}
-          onInputChange={setUserToBenny}
-          onSend={sendToBenny}
-          canSend={tokens.Larry > 0}
-          personality={aiPersonalities['Benny']}
-        />
+      {/* Chat boxes - Stacked collapsible chats */}
+      <div className="flex flex-col space-y-2 w-full max-w-2xl mx-auto">
+        {aiNames.map(aiName => {
+          const aiPersonality = AI_PERSONALITIES.find(ai => ai.name === aiName);
+          const unreadCount = getUnreadCount(aiName);
+          
+          return (
+            <CollapsibleChat
+              key={aiName}
+              title={`Chat with ${aiName}`}
+              aiName={aiName}
+              messages={getUserToAIMessages(aiName)}
+              input={chatStates[aiName].input}
+              onInputChange={(value) => handleInputChange(aiName, value)}
+              onSend={() => sendToAI(aiName)}
+              canSend={tokens.Larry > 0}
+              personality={aiPersonality?.shortDescription}
+              isExpanded={chatStates[aiName].expanded}
+              onToggleExpand={() => toggleChatExpansion(aiName)}
+              unreadCount={unreadCount}
+            />
+          );
+        })}
+      </div>
 
-        <ChatBox
-          title="Chat with Gary"
-          messages={getUserToGaryMessages()}
-          input={userToGary}
-          onInputChange={setUserToGary}
-          onSend={sendToGary}
-          canSend={tokens.Larry > 0}
-          personality={aiPersonalities['Gary']}
-        />
-
-        {/* Monitor panel */}
-        <div className="w-full max-w-md bg-white shadow rounded p-4 h-[600px] overflow-y-auto">
-          <h2 className="text-lg font-bold mb-2">AI Monitor Log</h2>
-          <p className="text-xs text-gray-500 mb-2 italic">
-            Watch Benny and Gary chat with each other
-          </p>
-          {getMonitorMessages().map((m, i) => (
+      {/* Monitor panel - Always visible */}
+      <div className="w-full max-w-2xl mx-auto bg-white shadow rounded p-4 h-[400px] overflow-y-auto">
+        <h2 className="text-lg font-bold mb-2">AI Monitor Log</h2>
+        <p className="text-xs text-gray-500 mb-2 italic">
+          Watch the AIs interact with each other
+        </p>
+        {getMonitorMessages().map((m, i) => {
+          // Find the AI personality to determine its color
+          const aiIndex = AI_PERSONALITIES.findIndex(ai => ai.name === m.sender);
+          const colorClasses = [
+            'bg-blue-50', 'bg-green-50', 'bg-purple-50', 
+            'bg-pink-50', 'bg-yellow-50', 'bg-indigo-50'
+          ];
+          // Determine background color based on sender
+          const bgColorClass = colorClasses[aiIndex % colorClasses.length];
+          
+          return (
             <div 
               key={i} 
-              className={`p-2 text-xs rounded my-1 ${
-                m.sender === 'Benny' 
-                  ? 'bg-blue-50' 
-                  : 'bg-green-50'
-              } ${
+              className={`p-2 text-xs rounded my-1 ${bgColorClass} ${
                 m.visibility === 'highlighted' 
                   ? 'border border-yellow-300' 
                   : ''
@@ -340,9 +382,22 @@ export default function Home() {
             >
               <strong>{m.sender} → {m.recipient}:</strong> {m.content}
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
+
+      {/* Debug panel (optional) */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="w-full max-w-2xl mx-auto mt-4 p-4 bg-gray-800 text-white rounded">
+          <h3 className="text-sm font-bold mb-2">Debug Panel</h3>
+          <div className="text-xs">
+            <div>Expanded Chat: {expandedChat || 'None'}</div>
+            <div>Turn Timer: {turnTimer}s</div>
+            <div>Processing: {isProcessing ? 'Yes' : 'No'}</div>
+            <div>Turn In Progress: {turnInProgress ? 'Yes' : 'No'}</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

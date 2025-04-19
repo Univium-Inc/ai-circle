@@ -1,5 +1,7 @@
+// pages/api/chat.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
+import { getAllAINames } from '@/lib/aiPersonalities';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -12,11 +14,14 @@ export default async function handler(
 
     // Determine which AI is making the request from the system message
     const systemMessage = messages.find((msg: { role: string; }) => msg.role === 'system');
-    const isGary = systemMessage?.content.includes('Gary');
-    const isBenny = systemMessage?.content.includes('Benny');
+    const systemContent = systemMessage?.content || '';
     
-    const currentAI = isBenny ? 'Benny' : (isGary ? 'Gary' : 'Unknown');
-    const otherAI = currentAI === 'Benny' ? 'Gary' : 'Benny';
+    // Find which AI this is based on the system message
+    const allAIs = getAllAINames();
+    const currentAI = allAIs.find(aiName => systemContent.includes(`You are ${aiName}`)) || 'Unknown';
+    
+    // Get all other AIs that are not the current one
+    const otherAIs = allAIs.filter(ai => ai !== currentAI);
     const userName = 'Larry'; // Default user name
 
     /** system rule that forces the TO/MESSAGE contract */
@@ -27,7 +32,7 @@ export default async function handler(
     
     IMPORTANT CONTEXT:
     - You are ${currentAI} with a unique personality
-    - The other AI participant is ${otherAI}
+    - The other AI participants are: ${otherAIs.join(', ')}
     - The human user is ${userName}
     - Each participant can only send ONE message per turn
     - You must carefully review your message history before deciding who to respond to
@@ -47,7 +52,7 @@ export default async function handler(
     MESSAGE: [your message]
     
     Rules for [recipient]:
-    - Must be either "${userName}" or "${otherAI}"
+    - Must be either "${userName}" or one of the other AIs (${otherAIs.join(', ')})
     - CANNOT be your own name (${currentAI} cannot message itself)
     - You must choose only ONE recipient
     
@@ -68,7 +73,7 @@ export default async function handler(
     });
 
     const raw = completion.choices[0]?.message?.content ?? '';
-    res.status(200).json({ raw });      // we return the raw 2‑line text
+    res.status(200).json({ raw }); // we return the raw 2‑line text
   } catch (err) {
     console.error('OpenAI error', err);
     res.status(500).json({ error: 'OpenAI failed' });

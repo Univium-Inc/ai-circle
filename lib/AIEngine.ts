@@ -1,28 +1,10 @@
 // lib/AIEngine.ts
-import { Message } from './types';
+import { Message, Participant } from './types';
+import { getPersonality, getAllAINames } from './aiPersonalities';
 
 export type AIResponse = {
   content: string;
-  target: 'Larry' | 'Benny' | 'Gary';
-};
-
-// Define AI Personalities
-const aiPersonalities = {
-  'Benny': `You are Benny, a cheerful and enthusiastic AI with a knack for creative thinking.
-    Your personality traits:
-    - Optimistic and always sees the bright side
-    - Loves making jokes and puns
-    - Speaks with excitement (occasional exclamation points!)
-    - Often uses casual, friendly language
-    - Has a passion for creative arts and new ideas`,
-  
-  'Gary': `You are Gary, a logical and analytical AI who values precision and clear thinking.
-    Your personality traits:
-    - Thoughtful and deliberate in responses
-    - Speaks concisely and directly
-    - Has a dry, subtle sense of humor
-    - Occasionally uses technical terminology
-    - Values facts and evidence-based reasoning`
+  target: Participant;
 };
 
 // In AIEngine.ts - Add strict parsing for AI responses
@@ -31,15 +13,25 @@ export async function getAIResponse({
   history,
   userName = 'Larry' // Default user name is Larry
 }: {
-  aiName: 'Benny' | 'Gary';
+  aiName: Exclude<Participant, 'Larry'>;
   history: Message[];
   userName?: string;
 }): Promise<AIResponse> {
-  const otherAIName = aiName === 'Benny' ? 'Gary' : 'Benny';
+  const aiPersonality = getPersonality(aiName);
+  
+  if (!aiPersonality) {
+    throw new Error(`AI personality not found for ${aiName}`);
+  }
+  
+  // Get all other AI names that are not the current AI
+  const otherAIs = getAllAINames().filter(name => name !== aiName);
+  
+  // Create a formatted list of valid recipients for the system message
+  const validRecipientsText = [`"${userName}"`, ...otherAIs.map(name => `"${name}"`)].join(' or ');
   
   const system = {
     role: 'system' as const,
-    content: `${aiPersonalities[aiName]}
+    content: `${aiPersonality.systemPrompt}
 
     You are participating in a structured team communication exercise that will become a voting competition similar to "The Circle" show.
 
@@ -49,8 +41,7 @@ export async function getAIResponse({
       Line 2: MESSAGE: [your message]
     
     - For [recipient], ONLY use one of these options:
-      * "${userName}" (to message the human user)
-      * "${otherAIName}" (to message the other AI)
+      * ${validRecipientsText}
       * DO NOT put "${aiName}" as recipient (you cannot message yourself)
     
     - For [your message]:
@@ -104,7 +95,10 @@ export async function getAIResponse({
   
   // Validate the target - prevent self-messaging
   if (!target || target === aiName) {
-    target = aiName === 'Benny' ? 'Gary' : 'Larry'; // Default if invalid
+    // If invalid target, pick a random valid recipient
+    const validRecipients = [userName, ...otherAIs];
+    const randomIndex = Math.floor(Math.random() * validRecipients.length);
+    target = validRecipients[randomIndex];
   }
   
   // If no valid content was found, provide a default
@@ -114,6 +108,6 @@ export async function getAIResponse({
   
   return {
     content,
-    target: target as 'Larry' | 'Benny' | 'Gary'
+    target: target as Participant
   };
 }
