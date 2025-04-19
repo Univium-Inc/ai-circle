@@ -21,6 +21,11 @@ export default async function handler(
     - You must carefully review your message history before deciding who to respond to
     - You CANNOT message yourself - only message other participants
     - Always be clear, direct, and brief in your responses
+
+    GOAL:
+    - Your goal is to get other participants to vote for you each turn. 
+    - Each player can only vote for one other player each turn.
+    - You must become friends and gain favorability with the other players.
     
     FORMATTING REQUIREMENTS:
     Respond in EXACTLY this two-line format:
