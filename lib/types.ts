@@ -3,4 +3,5 @@ export type Message = {
   recipient: string;
   content: string;
   timestamp: number;
+  isPrivate?: boolean; // Flag for AI-to-AI messages
 };

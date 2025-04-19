@@ -1,3 +1,4 @@
+// pages/index.tsx - complete rewrite
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,6 +13,7 @@ type ChatBoxProps = {
   input: string;
   onInputChange: (v: string) => void;
   onSend: () => void;
+  canSend: boolean;
 };
 
 const ChatBox = ({
@@ -20,13 +22,14 @@ const ChatBox = ({
   input,
   onInputChange,
   onSend,
+  canSend,
 }: ChatBoxProps) => (
   <div className="flex flex-col w-full max-w-md bg-white shadow rounded p-4 h-[600px]">
     <h2 className="font-semibold mb-2">{title}</h2>
     <div className="flex-1 overflow-y-auto space-y-2 mb-2">
       {messages.map((m, i) => (
         <div key={i} className="p-2 rounded bg-gray-100 text-sm">
-          <strong>{m.sender} ➜ {m.recipient}:</strong> {m.content}
+          <strong>{m.sender} → {m.recipient}:</strong> {m.content}
         </div>
       ))}
     </div>
@@ -36,186 +39,209 @@ const ChatBox = ({
         onChange={(e) => onInputChange(e.target.value)}
         placeholder={`Message to ${title.split(' ')[1]}…`}
         className="flex-1"
-        onKeyDown={(e) => e.key === 'Enter' && onSend()}
+        onKeyDown={(e) => canSend && e.key === 'Enter' && onSend()}
+        disabled={!canSend}
       />
-      <Button onClick={onSend}>Send</Button>
+      <Button onClick={onSend} disabled={!canSend}>Send</Button>
     </div>
   </div>
 );
 
 /* ---------- main page ---------- */
 export default function Home() {
-  /* conversation histories (last 20 each) */
-  const [ai1Hist, setAi1Hist] = useState<Message[]>([]);
-  const [ai2Hist, setAi2Hist] = useState<Message[]>([]);
-  /* inbound queues – what each AI hasn’t processed yet */
-  const [ai1Queue, setAi1Queue] = useState<Message[]>([]);
-  const [ai2Queue, setAi2Queue] = useState<Message[]>([]);
-  /* monitor panel */
-  const [monitorLog, setMonitorLog] = useState<Message[]>([]);
-  /* user inputs (one box per AI) */
+  // All messages in the system
+  const [messages, setMessages] = useState<Message[]>([]);
+  
+  // User inputs
   const [userToAi1, setUserToAi1] = useState('');
   const [userToAi2, setUserToAi2] = useState('');
-  /* tokens & turn timer */
-  const [tokens, setTokens] = useState({ user: 1, 'AI 1': 0, 'AI 2': 0 });
+  
+  // Tokens & turn timer
+  const [tokens, setTokens] = useState({
+    user: 1,
+    'AI 1': 0,
+    'AI 2': 0
+  });
+  
   const [turnTimer, setTurnTimer] = useState(30);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  /* secret words */
+  // Secret words
   const [secrets] = useState({
-    user : SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
+    user: SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
     'AI 1': SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
-    'AI 2': SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
+    'AI 2': SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)]
   });
 
-  /* ---------- user message helpers ---------- */
-  const sendToAI = (ai: 'AI 1' | 'AI 2', text: string, resetInput: () => void) => {
-    if (!text.trim() || tokens.user <= 0) return;
-
-    const msg: Message = {
-      sender: 'user',
-      recipient: ai,
-      content: text.trim(),
-      timestamp: Date.now(),
-    };
-
-    /* show immediately in that chat box */
-    if (ai === 'AI 1') setAi1Hist((p) => [...p.slice(-19), msg]);
-    else               setAi2Hist((p) => [...p.slice(-19), msg]);
-
-    /* enqueue for AI to read on its turn */
-    if (ai === 'AI 1') setAi1Queue((q) => [...q, msg]);
-    else               setAi2Queue((q) => [...q, msg]);
-
-    /* spend token + clear input */
-    setTokens((t) => ({ ...t, user: t.user - 1 }));
-    resetInput();
+  // Get filtered messages for each chat view
+  const getUserToAI1Messages = () => {
+    return messages.filter(
+      m => (m.sender === 'user' && m.recipient === 'AI 1') ||
+           (m.sender === 'AI 1' && m.recipient === 'user')
+    );
   };
 
-  /* ---------- AI turn processor ---------- */
-  const processAI = async (ai: 'AI 1' | 'AI 2') => {
-    if (tokens[ai] <= 0) return;
+  const getUserToAI2Messages = () => {
+    return messages.filter(
+      m => (m.sender === 'user' && m.recipient === 'AI 2') ||
+           (m.sender === 'AI 2' && m.recipient === 'user')
+    );
+  };
+
+  const getMonitorMessages = () => {
+    return messages.filter(
+      m => m.sender !== 'user' && m.recipient !== 'user'
+    );
+  };
+
+  // Send message function
+  const sendMessage = (sender: string, recipient: string, content: string) => {
+    if (!content.trim()) return;
     
-    // Get messages directed to this AI
-    const queue = ai === 'AI 1' ? ai1Queue : ai2Queue;
-    if (queue.length === 0) return; // Don't process if there are no messages
+    const newMessage: Message = {
+      sender,
+      recipient,
+      content: content.trim(),
+      timestamp: Date.now(),
+      isPrivate: sender !== 'user' && recipient !== 'user'
+    };
     
-    // Clear the queue for this AI
-    if (ai === 'AI 1') setAi1Queue([]);
-    else setAi2Queue([]);
-  
-    const history = ai === 'AI 1' ? ai1Hist : ai2Hist;
-    const secret = secrets[ai];
-    const context = [...history.slice(-20), ...queue]; // last 20 + unread
-  
-    try {
-      // Get AI reply & chosen target
-      const { content, target } = await getAIResponse({ 
-        aiName: ai, 
-        secretWord: secret, 
-        history: context 
-      });
-  
-      const reply: Message = {
-        sender: ai,
-        recipient: target,
-        content,
-        timestamp: Date.now(),
-      };
-  
-      // Add to history of the AI that sent the message
-      if (ai === 'AI 1') setAi1Hist((h) => [...h.slice(-19), reply]);
-      else setAi2Hist((h) => [...h.slice(-19), reply]);
-  
-      // If target is user, we're done
-      if (target === 'user') {
-        // Already added to history above
-      } else {
-        // Send to the OTHER AI's queue and log in monitor
-        if (target === 'AI 1') setAi1Queue((q) => [...q, reply]);
-        else if (target === 'AI 2') setAi2Queue((q) => [...q, reply]);
-  
-        // Always add to monitor log
-        setMonitorLog((log) => [...log.slice(-19), reply]);
-      }
-  
-      // Spend token - make sure we never go below 0
-      setTokens((t) => ({
-        ...t,
-        [ai]: Math.max(0, t[ai] - 1)
-      }));
-    } catch (error) {
-      console.error(`Error processing ${ai} response:`, error);
+    setMessages(prev => [...prev, newMessage]);
+    
+    // Spend token
+    setTokens(prev => ({
+      ...prev,
+      [sender]: Math.max(0, prev[sender] - 1)
+    }));
+    
+    // Process AI responses if necessary
+    if (recipient === 'AI 1' || recipient === 'AI 2') {
+      processAITurn(recipient);
     }
   };
 
-  /* ---------- turn / timer loop ---------- */
+  // User send functions
+  const sendToAI1 = () => {
+    if (tokens.user <= 0 || !userToAi1.trim()) return;
+    sendMessage('user', 'AI 1', userToAi1);
+    setUserToAi1('');
+  };
+
+  const sendToAI2 = () => {
+    if (tokens.user <= 0 || !userToAi2.trim()) return;
+    sendMessage('user', 'AI 2', userToAi2);
+    setUserToAi2('');
+  };
+
+  // Process AI turn
+  const processAITurn = async (ai: 'AI 1' | 'AI 2') => {
+    if (tokens[ai] <= 0 || isProcessing) return;
+    
+    setIsProcessing(true);
+    
+    try {
+      // Get all messages that this AI should see
+      const aiHistory = messages.filter(
+        m => m.sender === ai || m.recipient === ai
+      ).slice(-20); // Limit to last 20 messages
+      
+      const { content, target } = await getAIResponse({
+        aiName: ai,
+        secretWord: secrets[ai],
+        history: aiHistory
+      });
+      
+      // Send the AI's message
+      sendMessage(ai, target, content);
+      
+      // If target is another AI, process their turn next
+      if (target !== 'user' && tokens[target] > 0) {
+        setTimeout(() => processAITurn(target), 1000);
+      }
+    } catch (error) {
+      console.error(`Error processing ${ai} turn:`, error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Turn timer effect
   useEffect(() => {
-    // Grant 1 token to each participant every 30s
-    const turn = setInterval(() => {
-      setTokens({ user: 1, 'AI 1': 1, 'AI 2': 1 });
+    // Grant 1 token each turn and add to existing tokens
+    const turnInterval = setInterval(() => {
+      setTokens(prev => ({
+        user: prev.user + 1,
+        'AI 1': prev['AI 1'] + 1,
+        'AI 2': prev['AI 2'] + 1
+      }));
       setTurnTimer(30);
-    }, 30_000);
-  
-    // Countdown display
-    const countdown = setInterval(() => {
-      setTurnTimer((n) => (n > 0 ? n - 1 : 0));
-    }, 1_000);
-  
-    return () => { 
-      clearInterval(turn); 
-      clearInterval(countdown); 
+    }, 30000);
+    
+    // Countdown timer
+    const countdownInterval = setInterval(() => {
+      setTurnTimer(prev => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    
+    return () => {
+      clearInterval(turnInterval);
+      clearInterval(countdownInterval);
     };
   }, []);
-  
-  // Replace the useEffect for processing AI turns
+
+  // Process AI turns when they get tokens
   useEffect(() => {
     const processAIs = async () => {
-      // Process AI turns one after another to avoid race conditions
-      if (tokens['AI 1'] > 0 && ai1Queue.length > 0) {
-        await processAI('AI 1');
+      // Don't process if we're already processing something
+      if (isProcessing) return;
+      
+      // Process AI 1 if it has tokens and received messages
+      if (tokens['AI 1'] > 0 && messages.some(m => m.recipient === 'AI 1')) {
+        await processAITurn('AI 1');
       }
       
-      if (tokens['AI 2'] > 0 && ai2Queue.length > 0) {
-        await processAI('AI 2');
+      // Process AI 2 if it has tokens and received messages
+      if (tokens['AI 2'] > 0 && messages.some(m => m.recipient === 'AI 2')) {
+        await processAITurn('AI 2');
       }
     };
     
     processAIs();
-  }, [tokens, ai1Queue, ai2Queue]);
+  }, [tokens, isProcessing]);
 
-  /* ---------- render ---------- */
   return (
     <div className="min-h-screen bg-gray-100 p-6 space-y-6">
-      {/* timer + token bar */}
+      {/* Timer + token bar */}
       <div className="text-center text-sm text-gray-700">
         ⏳ <strong>Next Turn In:</strong> {turnTimer}s<br/>
-        🎟 <strong>Tokens</strong> — User: {tokens.user} | AI 1: {tokens['AI 1']} | AI 2: {tokens['AI 2']}
+        🎟 <strong>Tokens</strong> — User: {tokens.user} | AI 1: {tokens['AI 1']} | AI 2: {tokens['AI 2']}
       </div>
 
-      {/* two user chat boxes */}
+      {/* Chat boxes */}
       <div className="flex gap-4 flex-col md:flex-row justify-center">
         <ChatBox
           title="Chat with AI 1"
-          messages={ai1Hist}
+          messages={getUserToAI1Messages()}
           input={userToAi1}
           onInputChange={setUserToAi1}
-          onSend={() => sendToAI('AI 1', userToAi1, () => setUserToAi1(''))}
+          onSend={sendToAI1}
+          canSend={tokens.user > 0}
         />
 
         <ChatBox
           title="Chat with AI 2"
-          messages={ai2Hist}
+          messages={getUserToAI2Messages()}
           input={userToAi2}
           onInputChange={setUserToAi2}
-          onSend={() => sendToAI('AI 2', userToAi2, () => setUserToAi2(''))}
+          onSend={sendToAI2}
+          canSend={tokens.user > 0}
         />
 
-        {/* monitor panel */}
+        {/* Monitor panel */}
         <div className="w-full max-w-md bg-white shadow rounded p-4 h-[600px] overflow-y-auto">
           <h2 className="text-lg font-bold mb-2">AI Monitor Log</h2>
-          {monitorLog.map((m, i) => (
-            <div key={i} className="p-2 text-xs bg-yellow-50 rounded">
-              <strong>{m.sender} ➜ {m.recipient}:</strong> {m.content}
+          {getMonitorMessages().map((m, i) => (
+            <div key={i} className="p-2 text-xs bg-yellow-50 rounded my-1">
+              <strong>{m.sender} → {m.recipient}:</strong> {m.content}
             </div>
           ))}
         </div>

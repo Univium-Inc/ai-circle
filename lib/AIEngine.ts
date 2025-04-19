@@ -1,4 +1,4 @@
-// In lib/AIEngine.ts
+// lib/AIEngine.ts
 import { Message } from './types';
 
 export type AIResponse = {
@@ -19,27 +19,29 @@ export async function getAIResponse({
   const system = {
     role: 'system' as const,
     content: `
-You are ${aiName}.
+You are ${aiName} in a turn-based messaging game.
 Your secret word is "${secretWord}" - don't reveal it unless directly asked.
-Rules recap:
-  • You have a conversation with the user and another AI.
-  • You can only send one message per turn.
-  • Always respond to questions directed at you.
-  • If asked to do something by the user, try to follow their instructions.
+
+Game Rules:
+- You can send one message per token you have
+- You must choose who to message (user or the other AI)
+- Always respond to questions directed at you
+- Follow instructions from the user when possible
+- Keep your messages brief and conversational
 
 Remember: you MUST output exactly:
 
 TO: <target>
 MESSAGE: <text>
 
-Where <target> is 'user', 'AI 1', or 'AI 2' (not yourself), and <text> is your message.
+Where <target> is 'user' or '${aiName === 'AI 1' ? 'AI 2' : 'AI 1'}' (not yourself), and <text> is your message.
 `,
   };
 
   /* map our history to openai format */
   const chatHistory = history.map((m) => ({
     role: m.sender === aiName ? 'assistant' : 'user',
-    content: `${m.sender}: ${m.content}`,
+    content: `${m.sender} → ${m.recipient}: ${m.content}`,
   }));
 
   /* call serverless route */
@@ -54,14 +56,17 @@ Where <target> is 'user', 'AI 1', or 'AI 2' (not yourself), and <text> is your m
 
   /* basic parse */
   const [toLine, msgLine] = raw.split('\n').map((s: string) => s.trim());
-  const target = (toLine?.replace('TO:', '').trim() || 
-                 (aiName === 'AI 1' ? 'AI 2' : 'AI 1')) as
-                 'user' | 'AI 1' | 'AI 2';
+  let target = toLine?.replace('TO:', '').trim();
   
-  // Make sure AI can't target itself
-  const validTarget = target === aiName ? (aiName === 'AI 1' ? 'AI 2' : 'AI 1') : target;
+  // Make sure AI can't target itself and handle invalid targets
+  if (!target || target === aiName) {
+    target = aiName === 'AI 1' ? 'AI 2' : 'user'; // Default fallback
+  }
   
   const content = (msgLine || '').replace(/^MESSAGE:\s*/i, '').trim() || raw;
 
-  return { content, target: validTarget };
+  return { 
+    content, 
+    target: target as 'user' | 'AI 1' | 'AI 2'
+  };
 }
