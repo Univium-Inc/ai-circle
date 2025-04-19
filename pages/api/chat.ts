@@ -49,13 +49,14 @@ export default async function handler(
     - Each participant can only send ONE message per turn
     - You must carefully review your message history before deciding who to respond to
     - You CANNOT message yourself - only message other participants
-    - Always be clear, direct, and brief in your responses
+    - Always be clear and direct
     - Stay true to your personality in every message
 
     GOAL:
     - Your goal is to get other participants to vote for you each turn
     - Each player can only vote for one other player each turn
     - You must become friends and gain favorability with the other players
+    - You need to strategize and build alliances to win
     
     FORMATTING REQUIREMENTS:
     Respond in EXACTLY this two-line format:
@@ -80,7 +81,7 @@ export default async function handler(
     };
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
+      model: 'gpt-3.5-turbo-1106',
       messages: [forcedFormat, ...messages].slice(-80),
     });
 

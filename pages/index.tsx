@@ -1,12 +1,11 @@
-// pages/index.tsx - updated with collapsible chats and multiple AIs
-import { useEffect, useState } from 'react';
+// pages/index.tsx - Enhanced with comprehensive logging and message tracking
+import { useEffect, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { getAIResponse } from '@/lib/AIEngine';
 import { Message, MessageVisibility, Participant, ChatState } from '@/lib/types';
 import { AI_PERSONALITIES, getAllAINames } from '@/lib/aiPersonalities';
 import { CollapsibleChat } from '@/components/CollapsibleChat';
 
-/* ---------- main page ---------- */
 export default function Home() {
   // All messages in the system
   const [messages, setMessages] = useState<Message[]>([]);
@@ -16,11 +15,10 @@ export default function Home() {
   
   // User inputs and chat states for each AI
   const [chatStates, setChatStates] = useState<Record<string, ChatState>>(() => {
-    // Initialize chat states for each AI
     const initialStates: Record<string, ChatState> = {};
     aiNames.forEach(name => {
       initialStates[name] = {
-        expanded: false, // All chats start collapsed
+        expanded: false,
         input: ''
       };
     });
@@ -45,7 +43,6 @@ export default function Home() {
       Larry: 1
     };
     
-    // Add tokens for all AIs
     aiNames.forEach(name => {
       initial[name as Participant] = 1;
     });
@@ -56,10 +53,49 @@ export default function Home() {
   const [turnTimer, setTurnTimer] = useState(30);
   const [isProcessing, setIsProcessing] = useState(false);
   const [turnInProgress, setTurnInProgress] = useState(false);
+
+  // Comprehensive logging for message changes
+  useEffect(() => {
+    // Tracking variable to prevent multiple logs
+    let lastLogTime = 0;
   
+    const logBennyMessages = () => {
+      const currentTime = Date.now();
+      
+      // Check if last log was more than 15 seconds ago
+      if (currentTime - lastLogTime > 15000) {
+        // Filter messages involving Benny
+        const bennyMessages = messages.filter(
+          m => m.sender === 'Benny' || m.recipient === 'Benny'
+        );
+  
+        if (bennyMessages.length > 0) {
+          console.group('Benny Messages Update');
+          console.log('Total Benny-related Messages:', bennyMessages.length);
+          console.log('Last 5 Benny Messages:', bennyMessages.slice(-5));
+          console.log('Most Recent Benny Message:', bennyMessages[bennyMessages.length - 1]);
+          console.groupEnd();
+  
+          // Update last log time
+          lastLogTime = currentTime;
+        }
+      }
+    };
+  
+    // Call logging function
+    logBennyMessages();
+  
+    // Optional: If you want to keep checking periodically
+    const intervalId = setInterval(logBennyMessages, 15000);
+  
+    // Cleanup
+    return () => clearInterval(intervalId);
+  }, [messages]);
+
   // Function to toggle chat expansion
   const toggleChatExpansion = (aiName: string) => {
-    // If this chat is already expanded, collapse it
+    console.log(`Toggling chat for: ${aiName}`);
+    
     if (expandedChat === aiName) {
       setExpandedChat(null);
       setChatStates(prev => ({
@@ -70,7 +106,6 @@ export default function Home() {
         }
       }));
     } else {
-      // Collapse any currently expanded chat
       if (expandedChat) {
         setChatStates(prev => ({
           ...prev,
@@ -81,7 +116,6 @@ export default function Home() {
         }));
       }
       
-      // Expand the clicked chat
       setExpandedChat(aiName);
       setChatStates(prev => ({
         ...prev,
@@ -91,7 +125,6 @@ export default function Home() {
         }
       }));
       
-      // Mark all messages as seen when expanding
       setLastSeen(prev => ({
         ...prev,
         [aiName]: Date.now()
@@ -100,28 +133,37 @@ export default function Home() {
   };
   
   // Get filtered messages for each chat view
-  const getUserToAIMessages = (aiName: string) => {
-    return messages.filter(
+  const getUserToAIMessages = useCallback((aiName: string) => {
+    const filteredMessages = messages.filter(
       m => (m.sender === 'Larry' && m.recipient === aiName) ||
            (m.sender === aiName && m.recipient === 'Larry')
     );
-  };
+    
+    //console.log(`Messages for ${aiName}:`, filteredMessages.length);
+    return filteredMessages;
+  }, [messages]);
 
-  const getMonitorMessages = () => {
-    return messages.filter(
+  const getMonitorMessages = useCallback(() => {
+    const aiToAiMessages = messages.filter(
       m => m.sender !== 'Larry' && m.recipient !== 'Larry'
     );
-  };
+    
+    //console.log('AI to AI Messages:', aiToAiMessages.length);
+    return aiToAiMessages;
+  }, [messages]);
   
   // Count unread messages for an AI
-  const getUnreadCount = (aiName: string) => {
-    return messages.filter(
+  const getUnreadCount = useCallback((aiName: string) => {
+    const unreadCount = messages.filter(
       m => m.sender === aiName && 
            m.recipient === 'Larry' && 
            m.timestamp && 
            m.timestamp > (lastSeen[aiName] || 0)
     ).length;
-  };
+    
+    //console.log(`Unread messages from ${aiName}:`, unreadCount);
+    return unreadCount;
+  }, [messages, lastSeen]);
 
   // Determine message visibility based on context
   const determineVisibility = (
@@ -134,7 +176,7 @@ export default function Home() {
       return 'private';
     }
     
-    // Highlight messages containing specific keywords (customize as needed)
+    // Highlight messages containing specific keywords
     const highlightKeywords = ['vote', 'favorite', 'best', 'choose', 'like', 'prefer'];
     if (highlightKeywords.some(keyword => content.toLowerCase().includes(keyword))) {
       return 'highlighted';
@@ -144,12 +186,30 @@ export default function Home() {
     return 'public';
   };
 
-  // Process a single AI response, returns true if message sent, false otherwise
+  // Process a single AI response
   const processAIMessage = async (ai: Exclude<Participant, 'Larry'>) => {
-    // Don't proceed if AI has no tokens
-    if (tokens[ai] <= 0) return false;
+    console.group(`Processing Message for ${ai}`);
+    console.log('All Messages:', messages);
     
-    // Set processing flag to prevent parallel processing
+    // Log all messages related to this AI
+    const relatedMessages = messages.filter(
+      m => m.sender === ai || m.recipient === ai
+    );
+    
+    console.log(`Related Messages for ${ai}:`, {
+      total: relatedMessages.length,
+      details: relatedMessages.map(m => ({
+        sender: m.sender,
+        recipient: m.recipient,
+        content: m.content
+      }))
+    });
+    
+    if (tokens[ai] <= 0) {
+      console.log(`${ai} has no tokens, skipping`);
+      return false;
+    }
+    
     setIsProcessing(true);
     
     try {
@@ -157,6 +217,8 @@ export default function Home() {
       const aiHistory = messages.filter(
         m => m.sender === ai || m.recipient === ai
       ).slice(-20);
+      
+      console.log(`AI History for ${ai}:`, aiHistory.length);
       
       // Get AI response
       const { content, target } = await getAIResponse({
@@ -167,7 +229,7 @@ export default function Home() {
       
       // Validate the target
       const validTarget = target === 'Larry' || (aiNames.includes(target) && target !== ai);
-      const finalTarget = validTarget ? target : 'Larry'; // Default to user if invalid
+      const finalTarget = validTarget ? target : 'Larry';
       
       // Determine visibility of this message
       const visibility = determineVisibility(ai, finalTarget, content.trim());
@@ -181,8 +243,14 @@ export default function Home() {
         visibility: visibility
       };
       
+      console.log(`${ai} sending message to ${finalTarget}:`, newMessage);
+      
       // Add message to state
-      setMessages(prev => [...prev, newMessage]);
+      setMessages(prev => {
+        const updatedMessages = [...prev, newMessage];
+        console.log('Updated Messages After AI Send:', updatedMessages.length);
+        return updatedMessages;
+      });
       
       // Deduct token AFTER sending message
       setTokens(prev => ({
@@ -190,10 +258,10 @@ export default function Home() {
         [ai]: prev[ai] - 1
       }));
       
-      return true; // Message was sent
+      return true;
     } catch (error) {
       console.error(`Error processing ${ai} turn:`, error);
-      return false; // No message was sent
+      return false;
     } finally {
       setIsProcessing(false);
     }
@@ -201,7 +269,11 @@ export default function Home() {
 
   // Process AI turns in a random order
   const processTurn = async () => {
-    if (turnInProgress) return;
+    if (turnInProgress) {
+      console.log('Turn already in progress, skipping');
+      return;
+    }
+    
     setTurnInProgress(true);
     
     try {
@@ -225,7 +297,20 @@ export default function Home() {
 
   // Send message function for user
   const sendMessage = (sender: Participant, recipient: Participant, content: string) => {
-    if (!content.trim() || tokens[sender] <= 0) return;
+    console.group('Sending Message');
+    console.log('Sender:', sender);
+    console.log('Recipient:', recipient);
+    console.log('Content:', content);
+    console.log('Current Messages Before:', messages);
+    console.log(`Sending message from ${sender} to ${recipient}:`, content);
+    
+    if (!content.trim() || tokens[sender] <= 0) {
+      console.log('Message send blocked:', {
+        content: content.trim(),
+        tokens: tokens[sender]
+      });
+      return;
+    }
     
     // Determine message visibility
     const visibility = determineVisibility(sender, recipient, content.trim());
@@ -240,7 +325,11 @@ export default function Home() {
     };
     
     // Add message to state
-    setMessages(prev => [...prev, newMessage]);
+    setMessages(prev => {
+      const updatedMessages = [...prev, newMessage];
+      console.log('Updated Messages After User Send:', updatedMessages.length);
+      return updatedMessages;
+    });
     
     // Deduct token
     setTokens(prev => ({
@@ -254,11 +343,22 @@ export default function Home() {
         processTurn();
       }, 500);
     }
+    console.log('Current Messages After:', messages);
+    console.groupEnd();
   };
 
   // User send functions
   const sendToAI = (aiName: string) => {
-    if (tokens.Larry <= 0 || !chatStates[aiName].input.trim()) return;
+    console.log(`Preparing to send to ${aiName}`);
+    
+    if (tokens.Larry <= 0 || !chatStates[aiName].input.trim()) {
+      console.log('Send to AI blocked:', {
+        tokens: tokens.Larry,
+        input: chatStates[aiName].input
+      });
+      return;
+    }
+    
     sendMessage('Larry', aiName as Participant, chatStates[aiName].input);
     
     // Clear input
@@ -284,7 +384,6 @@ export default function Home() {
 
   // Turn timer effect - replenish tokens every 30 seconds
   useEffect(() => {
-    // Grant 1 token to all participants every turn
     const turnInterval = setInterval(() => {
       setTokens(prev => {
         const newTokens = { ...prev };
@@ -297,8 +396,10 @@ export default function Home() {
           newTokens[ai as Participant] = prev[ai as Participant] + 1;
         });
         
+        console.log('Tokens refreshed:', newTokens);
         return newTokens;
       });
+      
       setTurnTimer(30);
       
       // Process AI turns after token refresh
@@ -318,9 +419,10 @@ export default function Home() {
     };
   }, []);
 
+  // Render component (rest of the component remains the same as your original implementation)
   return (
     <div className="min-h-screen bg-gray-100 p-6 space-y-6">
-      {/* Timer + token bar */}
+      {/* [Your existing render logic remains unchanged] */}
       <div className="text-center text-sm text-gray-700">
         <h1 className="text-xl font-bold mb-2">The Circle: AI Edition</h1>
         ⏳ <strong>Next Turn In:</strong> {turnTimer}s<br/>

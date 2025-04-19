@@ -7,19 +7,30 @@ export type AIResponse = {
   target: Participant;
 };
 
-// In AIEngine.ts - Add strict parsing for AI responses
 export async function getAIResponse({
   aiName,
   history,
-  userName = 'Larry' // Default user name is Larry
+  userName = 'Larry'
 }: {
   aiName: Exclude<Participant, 'Larry'>;
   history: Message[];
   userName?: string;
 }): Promise<AIResponse> {
+  // Selective logging only for Benny
+  if (aiName === 'Benny') {
+    console.group(`Benny AI Response Generation`);
+    console.log('Input History Length:', history.length);
+    console.log('Message History:', history.map(m => ({
+      sender: m.sender,
+      recipient: m.recipient,
+      content: m.content
+    })));
+  }
+  
   const aiPersonality = getPersonality(aiName);
   
   if (!aiPersonality) {
+    console.error(`AI personality not found for ${aiName}`);
     throw new Error(`AI personality not found for ${aiName}`);
   }
   
@@ -27,87 +38,135 @@ export async function getAIResponse({
   const otherAIs = getAllAINames().filter(name => name !== aiName);
   
   // Create a formatted list of valid recipients for the system message
-  const validRecipientsText = [`"${userName}"`, ...otherAIs.map(name => `"${name}"`)].join(' or ');
+  const validRecipients = [userName, ...otherAIs];
+  const validRecipientsText = validRecipients.map(name => `"${name}"`).join(' or ');
   
+  // Log the history for debugging
+  console.log('Message History:', history.map(m => ({
+    sender: m.sender,
+    recipient: m.recipient,
+    content: m.content
+  })));
+
   const system = {
     role: 'system' as const,
     content: `${aiPersonality.systemPrompt}
 
-    You are participating in a structured team communication exercise that will become a voting competition similar to "The Circle" show.
+    CURRENT CONTEXT:
+    - You are ${aiName}
+    - Possible recipients: ${validRecipientsText}
 
     IMPORTANT FORMATTING RULES:
-    - Reply with EXACTLY these two lines:
+    - Respond with EXACTLY these two lines:
       Line 1: TO: [recipient]
       Line 2: MESSAGE: [your message]
     
-    - For [recipient], ONLY use one of these options:
-      * ${validRecipientsText}
-      * DO NOT put "${aiName}" as recipient (you cannot message yourself)
+    RECIPIENT RULES:
+    - Choose from: ${validRecipientsText}
+    - CANNOT message yourself (${aiName})
+    - Consider context when selecting recipient
     
-    - For [your message]:
-      * Keep it brief (under 20 words)
-      * Do not include any routing information
-      * Do not repeat who you are or who you're messaging
-      * Just provide your direct response
-      * Make sure your message reflects your unique personality
+    MESSAGE GUIDELINES:
+    - Brief (under 20 words)
+    - Reflect your unique personality
+    - Directly respond to conversation context
+    - No routing information
+    - No self-referential statements
     
-    EXAMPLE CORRECT FORMAT:
-    TO: ${userName}
-    MESSAGE: My favorite color is blue!
-    
-    EXAMPLE INCORRECT FORMAT:
-    TO: ${aiName}
-    MESSAGE: ${aiName}, the user is asking for your favorite color.`
+    EXAMPLE FORMAT:
+    TO: Xander
+    MESSAGE: Your strategic approach is intriguing!`
   };
 
-  /* map our history to openai format */
-  const chatHistory = history.map((m) => ({
-    role: m.sender === aiName ? 'assistant' : 'user',
-    content: `${m.sender} → ${m.recipient}: ${m.content}`,
-  }));
-
-  /* call serverless route */
-  const res = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages: [system, ...chatHistory] }),
+  // Convert history to OpenAI chat format with enhanced logging
+  const chatHistory = history.map((m) => {
+    const messageFormat = {
+      role: m.sender === aiName ? 'assistant' : 'user',
+      content: `${m.sender} → ${m.recipient}: ${m.content}`,
+    };
+    console.log('Formatted History Message:', messageFormat);
+    return messageFormat;
   });
 
-  if (!res.ok) throw new Error('AI request failed');
-  const { raw } = await res.json(); // two-line string
+  try {
+    // Call API route
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        messages: [system, ...chatHistory],
+        debug: {
+          aiName,
+          historyLength: history.length
+        }
+      }),
+    });
 
-  // Much stricter parsing of the response
-  const lines = raw.split('\n').map((line: string) => line.trim());
-  let target = '';
-  let content = '';
-  
-  // Find TO: line and extract target
-  const toLine = lines.find((line: string) => line.startsWith('TO:'));
-  if (toLine) {
-    target = toLine.replace('TO:', '').trim();
+    // Enhanced error handling
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error('AI Request Failed:', {
+        status: res.status,
+        statusText: res.statusText,
+        body: errorText
+      });
+      throw new Error(`AI request failed: ${errorText}`);
+    }
+
+    // Parse response
+    const { raw } = await res.json();
+    console.log('Raw AI Response:', raw);
+
+    // Strict parsing with extensive logging
+    const lines = raw.split('\n').map((line: string) => line.trim()).filter(Boolean);
+    console.log('Parsed Lines:', lines);
+
+    let target = '';
+    let content = '';
+    
+    // Extract TO and MESSAGE
+    const toLine = lines.find((line: string) => line.startsWith('TO:'));
+    const msgLine = lines.find((line: string) => line.startsWith('MESSAGE:'));
+
+    if (toLine) {
+      target = toLine.replace('TO:', '').trim();
+      console.log('Extracted Target:', target);
+    }
+    
+    if (msgLine) {
+      content = msgLine.replace('MESSAGE:', '').trim();
+      console.log('Extracted Content:', content);
+    }
+    
+    // Validate and correct target
+    const isValidTarget = validRecipients.includes(target);
+    if (!isValidTarget || target === aiName) {
+      console.warn(`Invalid target ${target}, selecting random recipient`);
+      const randomIndex = Math.floor(Math.random() * validRecipients.length);
+      target = validRecipients[randomIndex];
+    }
+    
+    // Ensure content exists
+    if (!content) {
+      console.warn('No content generated, using default message');
+      content = `Thinking about our conversation, ${target}.`;
+    }
+
+    console.log('Final Response:', { target, content });
+    console.groupEnd();
+
+    return {
+      content,
+      target: target as Participant
+    };
+  } catch (error) {
+    console.error('Comprehensive AI Response Error:', error);
+    console.groupEnd();
+    
+    // Fallback response
+    return {
+      content: `Something went wrong while generating a response.`,
+      target: userName as Participant
+    };
   }
-  
-  // Find MESSAGE: line and extract content
-  const msgLine = lines.find((line: string) => line.startsWith('MESSAGE:'));
-  if (msgLine) {
-    content = msgLine.replace('MESSAGE:', '').trim();
-  }
-  
-  // Validate the target - prevent self-messaging
-  if (!target || target === aiName) {
-    // If invalid target, pick a random valid recipient
-    const validRecipients = [userName, ...otherAIs];
-    const randomIndex = Math.floor(Math.random() * validRecipients.length);
-    target = validRecipients[randomIndex];
-  }
-  
-  // If no valid content was found, provide a default
-  if (!content) {
-    content = "I didn't understand the question.";
-  }
-  
-  return {
-    content,
-    target: target as Participant
-  };
 }
