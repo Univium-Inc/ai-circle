@@ -26,11 +26,14 @@ const ChatBox = ({
   <div className="flex flex-col w-full max-w-md bg-white shadow rounded p-4 h-[600px]">
     <h2 className="font-semibold mb-2">{title}</h2>
     <div className="flex-1 overflow-y-auto space-y-2 mb-2">
-      {messages.map((m, i) => (
-        <div key={i} className="p-2 rounded bg-gray-100 text-sm">
-          <strong>{m.sender} → {m.recipient}:</strong> {m.content}
-        </div>
-      ))}
+      {messages.map((m, i) => {
+        // Simple clean rendering of the message
+        return (
+          <div key={i} className="p-2 rounded bg-gray-100 text-sm">
+            <strong>{m.sender} → {m.recipient}:</strong> {m.content}
+          </div>
+        );
+      })}
     </div>
     <div className="flex gap-2">
       <Input
@@ -268,7 +271,12 @@ export default function Home() {
         <div className="w-full max-w-md bg-white shadow rounded p-4 h-[600px] overflow-y-auto">
           <h2 className="text-lg font-bold mb-2">AI Monitor Log</h2>
           {getMonitorMessages().map((m, i) => (
-            <div key={i} className="p-2 text-xs bg-yellow-50 rounded my-1">
+            <div 
+              key={i} 
+              className={`p-2 text-xs rounded my-1 ${
+                m.sender === 'AI 1' ? 'bg-blue-50' : 'bg-green-50'
+              }`}
+            >
               <strong>{m.sender} → {m.recipient}:</strong> {m.content}
             </div>
           ))}
