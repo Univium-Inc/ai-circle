@@ -94,68 +94,94 @@ export default function Home() {
   /* ---------- AI turn processor ---------- */
   const processAI = async (ai: 'AI 1' | 'AI 2') => {
     if (tokens[ai] <= 0) return;
-
-    /* pull queue + clear it */
-    const queue     = ai === 'AI 1' ? ai1Queue : ai2Queue;
+    
+    // Get messages directed to this AI
+    const queue = ai === 'AI 1' ? ai1Queue : ai2Queue;
+    if (queue.length === 0) return; // Don't process if there are no messages
+    
+    // Clear the queue for this AI
     if (ai === 'AI 1') setAi1Queue([]);
-    else               setAi2Queue([]);
-
-    const history   = ai === 'AI 1' ? ai1Hist : ai2Hist;
-    const secret    = secrets[ai];
-    const context   = [...history.slice(-20), ...queue];   // last 20 + unread
-
-    /* get AI reply & chosen target */
-    const { content, target } = await getAIResponse({ aiName: ai, secretWord: secret, history: context });
-
-
-    const reply: Message = {
-      sender    : ai,
-      recipient : target,
-      content,
-      timestamp : Date.now(),
-    };
-
-    if (target === 'user') {
-      /* show in correct user chat */
-      if (ai === 'AI 1') setAi1Hist((h) => [...h.slice(-19), reply]);
-      else               setAi2Hist((h) => [...h.slice(-19), reply]);
-    } else {
-      /* send to the OTHER AI’s queue and log in monitor */
-      if (ai === 'AI 1') setAi2Queue((q) => [...q, reply]);
-      else               setAi1Queue((q) => [...q, reply]);
-
-      setMonitorLog((log) => [...log.slice(-19), reply]);
-    }
-
-    /* spend token */
-    setTokens((t) => {
-      // make sure we never go below 0
-      const val = Math.max(0, (t[ai] ?? 0) - 1);
-      return { ...t, [ai]: val };
+    else setAi2Queue([]);
+  
+    const history = ai === 'AI 1' ? ai1Hist : ai2Hist;
+    const secret = secrets[ai];
+    const context = [...history.slice(-20), ...queue]; // last 20 + unread
+  
+    try {
+      // Get AI reply & chosen target
+      const { content, target } = await getAIResponse({ 
+        aiName: ai, 
+        secretWord: secret, 
+        history: context 
       });
+  
+      const reply: Message = {
+        sender: ai,
+        recipient: target,
+        content,
+        timestamp: Date.now(),
+      };
+  
+      // Add to history of the AI that sent the message
+      if (ai === 'AI 1') setAi1Hist((h) => [...h.slice(-19), reply]);
+      else setAi2Hist((h) => [...h.slice(-19), reply]);
+  
+      // If target is user, we're done
+      if (target === 'user') {
+        // Already added to history above
+      } else {
+        // Send to the OTHER AI's queue and log in monitor
+        if (target === 'AI 1') setAi1Queue((q) => [...q, reply]);
+        else if (target === 'AI 2') setAi2Queue((q) => [...q, reply]);
+  
+        // Always add to monitor log
+        setMonitorLog((log) => [...log.slice(-19), reply]);
+      }
+  
+      // Spend token - make sure we never go below 0
+      setTokens((t) => ({
+        ...t,
+        [ai]: Math.max(0, t[ai] - 1)
+      }));
+    } catch (error) {
+      console.error(`Error processing ${ai} response:`, error);
+    }
   };
 
   /* ---------- turn / timer loop ---------- */
   useEffect(() => {
-    /* grant 1 token each every 30 s */
+    // Grant 1 token to each participant every 30s
     const turn = setInterval(() => {
       setTokens({ user: 1, 'AI 1': 1, 'AI 2': 1 });
       setTurnTimer(30);
     }, 30_000);
-
-    /* countdown display */
+  
+    // Countdown display
     const countdown = setInterval(() => {
       setTurnTimer((n) => (n > 0 ? n - 1 : 0));
     }, 1_000);
-
-    return () => { clearInterval(turn); clearInterval(countdown); };
+  
+    return () => { 
+      clearInterval(turn); 
+      clearInterval(countdown); 
+    };
   }, []);
-
-  /* when tokens refresh, let each AI think */
+  
+  // Replace the useEffect for processing AI turns
   useEffect(() => {
-        if (tokens['AI 1'] > 0) processAI('AI 1');
-        if (tokens['AI 2'] > 0) processAI('AI 2');
-  }, [tokens]);
+    const processAIs = async () => {
+      // Process AI turns one after another to avoid race conditions
+      if (tokens['AI 1'] > 0 && ai1Queue.length > 0) {
+        await processAI('AI 1');
+      }
+      
+      if (tokens['AI 2'] > 0 && ai2Queue.length > 0) {
+        await processAI('AI 2');
+      }
+    };
+    
+    processAIs();
+  }, [tokens, ai1Queue, ai2Queue]);
 
   /* ---------- render ---------- */
   return (
