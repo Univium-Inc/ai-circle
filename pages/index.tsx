@@ -1,9 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, SetStateAction } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 
+type Message = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
 export default function ChatApp() {
-  const [messages, setMessages] = useState(() => {
+  const [messages, setMessages] = useState<Message[]>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('chatMessages');
       return saved ? JSON.parse(saved) : [];
@@ -13,7 +18,7 @@ export default function ChatApp() {
 
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const chatEndRef = useRef(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     localStorage.setItem('chatMessages', JSON.stringify(messages));
@@ -26,7 +31,7 @@ export default function ChatApp() {
   const sendMessage = async () => {
     if (!input.trim()) return;
 
-    const userMessage = { role: 'user', content: input };
+    const userMessage: Message = { role: 'user', content: input };
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
     setInput('');
@@ -36,25 +41,40 @@ export default function ChatApp() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages })
+        body: JSON.stringify({ messages: newMessages }),
       });
+
       const data = await res.json();
-      setMessages([...newMessages, { role: 'assistant', content: data.reply }]);
+      const replyMessage: Message = {
+        role: 'assistant',
+        content: data.reply ?? 'No response',
+      };
+
+      setMessages([...newMessages, replyMessage]);
     } catch (err) {
       console.error(err);
-      setMessages([...newMessages, { role: 'assistant', content: 'Error talking to AI.' }]);
+      setMessages([
+        ...newMessages,
+        { role: 'assistant', content: 'Error talking to AI.' },
+      ]);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen p-4 flex flex-col items-center justify-center">
+    <div className="min-h-screen p-4 flex flex-col items-center justify-center bg-gray-50">
       <div className="w-full max-w-xl bg-white rounded-xl shadow-md p-4">
         <div className="h-[500px] overflow-y-auto space-y-2 mb-4">
           {messages.map((msg, i) => (
-            <div key={i} className={\`p-2 rounded \${msg.role === 'user' ? 'bg-blue-100' : 'bg-gray-100'}\`}>
-              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong> {msg.content}
+            <div
+              key={i}
+              className={`p-2 rounded ${
+                msg.role === 'user' ? 'bg-blue-100' : 'bg-gray-100'
+              }`}
+            >
+              <strong>{msg.role === 'user' ? 'You' : 'AI'}:</strong>{' '}
+              {msg.content}
             </div>
           ))}
           <div ref={chatEndRef} />
@@ -62,12 +82,14 @@ export default function ChatApp() {
         <div className="flex gap-2">
           <Input
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={(e: { target: { value: SetStateAction<string>; }; }) => setInput(e.target.value)}
             placeholder="Type your message..."
             className="flex-1"
-            onKeyDown={e => e.key === 'Enter' && sendMessage()}
+            onKeyDown={(e: { key: string; }) => e.key === 'Enter' && sendMessage()}
           />
-          <Button onClick={sendMessage} disabled={loading}>{loading ? '...' : 'Send'}</Button>
+          <Button onClick={sendMessage} disabled={loading}>
+            {loading ? '...' : 'Send'}
+          </Button>
         </div>
       </div>
     </div>
