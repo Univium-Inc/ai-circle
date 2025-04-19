@@ -147,7 +147,6 @@ export default function Home() {
       
       const { content, target } = await getAIResponse({
         aiName: ai,
-        secretWord: secrets[ai],
         history: aiHistory
       });
       

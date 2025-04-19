@@ -8,33 +8,30 @@ export type AIResponse = {
 
 export async function getAIResponse({
   aiName,
-  secretWord,
   history,
 }: {
   aiName: 'AI 1' | 'AI 2';
-  secretWord: string;
   history: Message[];
 }): Promise<AIResponse> {
   /* prepend game-specific system context for THIS AI */
   const system = {
     role: 'system' as const,
     content: `
-You are ${aiName} in a turn-based messaging game.
-Your secret word is "${secretWord}" - don't reveal it unless directly asked.
+You are ${aiName} in a team building messaging exercise.
 
-Game Rules:
-- You can send one message per token you have
-- You must choose who to message (user or the other AI)
-- Always respond to questions directed at you
-- Follow instructions from the user when possible
-- Keep your messages brief and conversational
+IMPORTANT RULES:
+- This is a coordinated team activity - follow user instructions closely
+- You can only send ONE message per token you have
+- Be brief and concise in your responses (20 words or less)
+- Do not repeat yourself or add unnecessary text
+- The user is the team leader and coordinates all activities
 
 Remember: you MUST output exactly:
 
 TO: <target>
 MESSAGE: <text>
 
-Where <target> is 'user' or '${aiName === 'AI 1' ? 'AI 2' : 'AI 1'}' (not yourself), and <text> is your message.
+Where <target> is 'user' or '${aiName === 'AI 1' ? 'AI 2' : 'AI 1'}' (not yourself), and <text> is your short message.
 `,
   };
 
