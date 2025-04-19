@@ -19,10 +19,9 @@ export async function getAIResponse({
   const system = {
     role   : 'system' as const,
     content: `
-You are ${aiName}. Your secret word is "${secretWord}".  
+You are ${aiName}.
 Rules recap:
-  • Never reveal your secret word.
-  • Try to uncover the recipient's word by subtle questions.
+  • Just try to have a detailed conversation and obey orders.
 Remember: you MUST output exactly:
 
 TO: <target>

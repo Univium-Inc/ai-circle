@@ -128,7 +128,11 @@ export default function Home() {
     }
 
     /* spend token */
-    setTokens((t) => ({ ...t, [ai]: t[ai] - 1 }));
+    setTokens((t) => {
+      // make sure we never go below 0
+      const val = Math.max(0, (t[ai] ?? 0) - 1);
+      return { ...t, [ai]: val };
+      });
   };
 
   /* ---------- turn / timer loop ---------- */
@@ -149,10 +153,8 @@ export default function Home() {
 
   /* when tokens refresh, let each AI think */
   useEffect(() => {
-    (async () => {
-        if (tokens['AI 1'] > 0) await processAI('AI 1');
-        if (tokens['AI 2'] > 0) await processAI('AI 2');
-    })();
+        if (tokens['AI 1'] > 0) processAI('AI 1');
+        if (tokens['AI 2'] > 0) processAI('AI 2');
   }, [tokens]);
 
   /* ---------- render ---------- */
