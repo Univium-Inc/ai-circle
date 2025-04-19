@@ -41,6 +41,7 @@ export default function Home() {
   const [userInput, setUserInput] = useState('');
   const [userMessages, setUserMessages] = useState<Message[]>([]);
   const [tokens, setTokens] = useState({ user: 1, 'AI 1': 0, 'AI 2': 0 });
+  const [turnTimer, setTurnTimer] = useState(30);
 
   const [secrets] = useState({
     user: SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
@@ -90,11 +91,19 @@ export default function Home() {
   };
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    const tokenInterval = setInterval(() => {
       setTokens({ user: 1, 'AI 1': 1, 'AI 2': 1 });
+      setTurnTimer(30);
     }, 30000);
 
-    return () => clearInterval(interval);
+    const countdown = setInterval(() => {
+      setTurnTimer((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+
+    return () => {
+      clearInterval(tokenInterval);
+      clearInterval(countdown);
+    };
   }, []);
 
   useEffect(() => {
@@ -104,6 +113,11 @@ export default function Home() {
 
   return (
     <div className='min-h-screen bg-gray-100 p-6 space-y-6'>
+      <div className='text-center text-sm text-gray-700'>
+        ⏳ <strong>Next Turn In:</strong> {turnTimer}s <br />
+        🎟 <strong>Tokens</strong> — User: {tokens.user} | AI 1: {tokens['AI 1']} | AI 2: {tokens['AI 2']}
+      </div>
+
       <div className='flex gap-4 flex-col md:flex-row justify-center'>
         <ChatBox name='User' messages={userMessages} input={userInput} onInputChange={setUserInput} onSend={sendUserMessage} />
         <div className='w-full max-w-md bg-white shadow rounded p-4 h-[600px] overflow-y-auto'>
