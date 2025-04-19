@@ -11,6 +11,7 @@ export default async function handler(
 ) {
   try {
     const { messages } = req.body; // already in OpenAI chat format
+    
 
     // Determine which AI is making the request from the system message
     const systemMessage = messages.find((msg: { role: string; }) => msg.role === 'system');
@@ -20,6 +21,10 @@ export default async function handler(
     const allAIs = getAllAINames();
     const currentAI = allAIs.find(aiName => systemContent.includes(`You are ${aiName}`)) || 'Unknown';
     
+    console.log('------------------');
+    console.log('currentAI:', currentAI);
+    console.log('Received messages:', messages);
+
     // Get all other AIs that are not the current one
     const otherAIs = allAIs.filter(ai => ai !== currentAI);
     const userName = 'Larry'; // Default user name
