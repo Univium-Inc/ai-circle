@@ -23,7 +23,14 @@ export default async function handler(
     
     console.log('------------------');
     console.log('currentAI:', currentAI);
-    console.log('Received messages:', messages);
+    console.log('Number of messages:', messages.length);
+    console.log('Message Details:');
+    messages.forEach((msg: { role: any; content: any; }, index: any) => {
+      console.log(`Message ${index}:`);
+      console.log('Role:', msg.role);
+      console.log('Content:', msg.content);
+      console.log('---');
+    });
 
     // Get all other AIs that are not the current one
     const otherAIs = allAIs.filter(ai => ai !== currentAI);
@@ -74,7 +81,7 @@ export default async function handler(
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
-      messages: [forcedFormat, ...messages].slice(-30),
+      messages: [forcedFormat, ...messages].slice(-80),
     });
 
     const raw = completion.choices[0]?.message?.content ?? '';
