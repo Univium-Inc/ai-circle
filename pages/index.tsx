@@ -1,4 +1,4 @@
-// pages/index.tsx - complete rewrite
+// pages/index.tsx - fixed version
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -89,7 +89,95 @@ export default function Home() {
     );
   };
 
-  // Send message function
+  // New consolidated function to process a single AI response
+  const processAIResponse = async (ai: 'AI 1' | 'AI 2') => {
+    // Don't proceed if AI has no tokens or we're already processing
+    if (tokens[ai] <= 0 || isProcessing) return;
+    
+    // Check if this AI has unread messages
+    const aiHasMessages = messages.some(m => 
+      m.recipient === ai && 
+      !messages.some(r => r.sender === ai && r.timestamp > m.timestamp)
+    );
+    
+    if (!aiHasMessages) return;
+    
+    // Set processing flag to prevent parallel processing
+    setIsProcessing(true);
+    
+    try {
+      // Get messages relevant to this AI
+      const aiHistory = messages.filter(
+        m => m.sender === ai || m.recipient === ai
+      ).slice(-20);
+      
+      // Deduct token BEFORE getting response
+      setTokens(prev => ({
+        ...prev,
+        [ai]: Math.max(0, prev[ai] - 1)
+      }));
+      
+      // Short delay to ensure token update happens
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Get AI response
+      const { content, target } = await getAIResponse({
+        aiName: ai,
+        history: aiHistory
+      });
+      
+      // Add validation check for the target
+      const validTarget = target === 'user' || target === (ai === 'AI 1' ? 'AI 2' : 'AI 1');
+      const finalTarget = validTarget ? target : 'user'; // Default to user if invalid
+      
+      const newMessage: Message = {
+        sender: ai,
+        recipient: finalTarget,
+        content: content.trim(),
+        timestamp: Date.now(),
+        isPrivate: finalTarget !== 'user'
+      };
+      
+      setMessages(prev => [...prev, newMessage]);
+    } catch (error) {
+      console.error(`Error processing ${ai} turn:`, error);
+      // Restore the token if there was an error
+      setTokens(prev => ({
+        ...prev,
+        [ai]: prev[ai] + 1
+      }));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Simplified checkAndProcessAI function
+  const checkAndProcessAI = async () => {
+    if (isProcessing) return;
+    
+    // Check AI 1 first
+    const ai1HasUnreadMessages = messages.some(m => 
+      m.recipient === 'AI 1' && 
+      !messages.some(r => r.sender === 'AI 1' && r.timestamp > m.timestamp)
+    );
+    
+    if (tokens['AI 1'] > 0 && ai1HasUnreadMessages) {
+      await processAIResponse('AI 1');
+      return; // Only process one AI at a time
+    }
+    
+    // Then check AI 2
+    const ai2HasUnreadMessages = messages.some(m => 
+      m.recipient === 'AI 2' && 
+      !messages.some(r => r.sender === 'AI 2' && r.timestamp > m.timestamp)
+    );
+    
+    if (tokens['AI 2'] > 0 && ai2HasUnreadMessages) {
+      await processAIResponse('AI 2');
+    }
+  };
+
+  // Send message function (simplified)
   const sendMessage = (sender: string, recipient: string, content: string) => {
     if (!content.trim()) return;
     
@@ -103,15 +191,13 @@ export default function Home() {
     
     setMessages(prev => [...prev, newMessage]);
     
-    // Spend token
-    setTokens(prev => ({
-      ...prev,
-      [sender as keyof typeof tokens]: Math.max(0, prev[sender as keyof typeof tokens] - 1)
-    }));
-    
-    // Process AI responses if necessary
-    if (recipient === 'AI 1' || recipient === 'AI 2') {
-      processAITurn(recipient);
+    // Spend token for user messages only
+    // AI tokens are spent in processAIResponse
+    if (sender === 'user') {
+      setTokens(prev => ({
+        ...prev,
+        user: Math.max(0, prev.user - 1)
+      }));
     }
   };
 
@@ -128,179 +214,9 @@ export default function Home() {
     setUserToAi2('');
   };
 
-
-  // Add this function to the Home component to handle sequential AI processing
-const processTurn = async () => {
-  // Don't process if already processing
-  if (isProcessing) return;
-  
-  setIsProcessing(true);
-  
-  try {
-    // First process AI 1 if it has tokens
-    if (tokens['AI 1'] > 0) {
-      // Check if AI 1 has any unread messages to respond to
-      const ai1HasMessages = messages.some(m => 
-        m.recipient === 'AI 1' && 
-        !messages.some(r => r.sender === 'AI 1' && r.timestamp > m.timestamp)
-      );
-      
-      if (ai1HasMessages) {
-        console.log("AI 1 processing with token:", tokens['AI 1']);
-        
-        // Process AI 1's response
-        const aiHistory = messages.filter(
-          m => m.sender === 'AI 1' || m.recipient === 'AI 1'
-        ).slice(-20);
-        
-        // Deduct token immediately
-        setTokens(prev => ({
-          ...prev,
-          'AI 1': prev['AI 1'] - 1
-        }));
-        
-        // Short delay to ensure state update completes
-        await new Promise(resolve => setTimeout(resolve, 50));
-        
-        // Get AI response
-        const { content, target } = await getAIResponse({
-          aiName: 'AI 1',
-          history: aiHistory
-        });
-        
-        // Add the message
-        const newMessage: Message = {
-          sender: 'AI 1',
-          recipient: target,
-          content: content.trim(),
-          timestamp: Date.now(),
-          isPrivate: target !== 'user'
-        };
-        
-        setMessages(prev => [...prev, newMessage]);
-        
-        // Short delay before continuing
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-    }
-    
-    // Then process AI 2 if it has tokens - this can respond to new AI 1 messages
-    if (tokens['AI 2'] > 0) {
-      // Get fresh message list including any new AI 1 messages
-      const currentMessages = [...messages];
-      
-      // Check if AI 2 has any unread messages
-      const ai2HasMessages = currentMessages.some(m => 
-        m.recipient === 'AI 2' && 
-        !currentMessages.some(r => r.sender === 'AI 2' && r.timestamp > m.timestamp)
-      );
-      
-      if (ai2HasMessages) {
-        console.log("AI 2 processing with token:", tokens['AI 2']);
-        
-        // Process AI 2's response
-        const aiHistory = currentMessages.filter(
-          m => m.sender === 'AI 2' || m.recipient === 'AI 2'
-        ).slice(-20);
-        
-        // Deduct token immediately
-        setTokens(prev => ({
-          ...prev,
-          'AI 2': prev['AI 2'] - 1
-        }));
-        
-        // Short delay to ensure state update completes
-        await new Promise(resolve => setTimeout(resolve, 50));
-        
-        // Get AI response
-        const { content, target } = await getAIResponse({
-          aiName: 'AI 2',
-          history: aiHistory
-        });
-        
-        // Add the message
-        const newMessage: Message = {
-          sender: 'AI 2',
-          recipient: target,
-          content: content.trim(),
-          timestamp: Date.now(),
-          isPrivate: target !== 'user'
-        };
-        
-        setMessages(prev => [...prev, newMessage]);
-      }
-    }
-  } catch (error) {
-    console.error("Error processing turn:", error);
-  } finally {
-    setIsProcessing(false);
-  }
-};
-
-  // Process AI turn
-  // Modify the processAITurn function in pages/index.tsx
-  const processAITurn = async (ai: 'AI 1' | 'AI 2') => {
-    // STRICT token check - don't proceed if AI has no tokens
-    if (tokens[ai] <= 0 || isProcessing) return;
-    
-    // Immediately set processing flag to prevent parallel processing
-    setIsProcessing(true);
-    
-    try {
-      // Check if this AI has been messaged (AI should only respond when it receives a message)
-      const aiHasMessages = messages.some(m => 
-        m.recipient === ai && 
-        !messages.some(r => r.sender === ai && r.timestamp > m.timestamp)
-      );
-      
-      // Only proceed if the AI has unread messages
-      if (!aiHasMessages) {
-        setIsProcessing(false);
-        return;
-      }
-      
-      // Get messages relevant to this AI
-      const aiHistory = messages.filter(
-        m => m.sender === ai || m.recipient === ai
-      ).slice(-20);
-      
-      // Get AI response
-      const { content, target } = await getAIResponse({
-        aiName: ai,
-        history: aiHistory
-      });
-      
-      // IMMEDIATELY deduct token BEFORE sending the message
-      setTokens(prev => ({
-        ...prev,
-        [ai]: Math.max(0, prev[ai] - 1)
-      }));
-      
-      // Add a slight delay to ensure token update happens first
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Then send the message
-      const newMessage: Message = {
-        sender: ai,
-        recipient: target,
-        content: content.trim(),
-        timestamp: Date.now(),
-        isPrivate: target !== 'user'
-      };
-      
-      setMessages(prev => [...prev, newMessage]);
-    } catch (error) {
-      console.error(`Error processing ${ai} turn:`, error);
-    } finally {
-      // Always release processing lock when done
-      setIsProcessing(false);
-    }
-  };
-
-  // Turn timer effect
-  // Replace your current token timer useEffect with this
+  // Turn timer effect (simplified)
   useEffect(() => {
-    // Grant 1 token each turn and add to existing tokens
+    // Grant 1 token each turn
     const turnInterval = setInterval(() => {
       setTokens(prev => ({
         user: prev.user + 1,
@@ -308,9 +224,6 @@ const processTurn = async () => {
         'AI 2': prev['AI 2'] + 1
       }));
       setTurnTimer(30);
-      
-      // Process the new turn after tokens are refreshed
-      setTimeout(() => processTurn(), 100);
     }, 30000);
     
     // Countdown timer
@@ -324,33 +237,13 @@ const processTurn = async () => {
     };
   }, []);
 
-  // Process AI turns when they get tokens
-  // Replace the useEffect for AI processing
+  // Process AI responses when messages or tokens change
   useEffect(() => {
-    const checkForAIMessages = async () => {
-      if (isProcessing) return;
-      
-      // Check if any AI has unread messages AND tokens
-      const ai1HasUnreadMessages = messages.some(m => 
-        m.recipient === 'AI 1' && 
-        !messages.some(r => r.sender === 'AI 1' && r.timestamp > m.timestamp)
-      );
-      
-      const ai2HasUnreadMessages = messages.some(m => 
-        m.recipient === 'AI 2' && 
-        !messages.some(r => r.sender === 'AI 2' && r.timestamp > m.timestamp)
-      );
-      
-      // Process one AI at a time - not both simultaneously
-      if (tokens['AI 1'] > 0 && ai1HasUnreadMessages) {
-        await processAITurn('AI 1');
-      } else if (tokens['AI 2'] > 0 && ai2HasUnreadMessages) {
-        await processAITurn('AI 2');
-      }
-    };
-    
-    checkForAIMessages();
-  }, [tokens, messages, isProcessing]);
+    // Only check for messages when not currently processing
+    if (!isProcessing) {
+      checkAndProcessAI();
+    }
+  }, [messages, tokens, isProcessing]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-6 space-y-6">
