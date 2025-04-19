@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { getAIResponse } from '@/lib/AIEngine';
-import { SECRET_WORDS } from '@/lib/secretWords';
 import { Message } from '@/lib/types';
 
 /* ---------- reusable chat component ---------- */
@@ -36,10 +35,10 @@ const ChatBox = ({
     <div className="flex gap-2">
       <Input
         value={input}
-        onChange={(e) => onInputChange(e.target.value)}
+        onChange={(e: { target: { value: string; }; }) => onInputChange(e.target.value)}
         placeholder={`Message to ${title.split(' ')[1]}…`}
         className="flex-1"
-        onKeyDown={(e) => canSend && e.key === 'Enter' && onSend()}
+        onKeyDown={(e: { key: string; }) => canSend && e.key === 'Enter' && onSend()}
         disabled={!canSend}
       />
       <Button onClick={onSend} disabled={!canSend}>Send</Button>
@@ -65,13 +64,6 @@ export default function Home() {
   
   const [turnTimer, setTurnTimer] = useState(30);
   const [isProcessing, setIsProcessing] = useState(false);
-
-  // Secret words
-  const [secrets] = useState({
-    user: SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
-    'AI 1': SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)],
-    'AI 2': SECRET_WORDS[Math.floor(Math.random() * SECRET_WORDS.length)]
-  });
 
   // Get filtered messages for each chat view
   const getUserToAI1Messages = () => {
@@ -111,7 +103,7 @@ export default function Home() {
     // Spend token
     setTokens(prev => ({
       ...prev,
-      [sender]: Math.max(0, prev[sender] - 1)
+      [sender as keyof typeof tokens]: Math.max(0, prev[sender as keyof typeof tokens] - 1)
     }));
     
     // Process AI responses if necessary
@@ -134,32 +126,61 @@ export default function Home() {
   };
 
   // Process AI turn
+  // Modify the processAITurn function in pages/index.tsx
   const processAITurn = async (ai: 'AI 1' | 'AI 2') => {
+    // STRICT token check - don't proceed if AI has no tokens
     if (tokens[ai] <= 0 || isProcessing) return;
     
+    // Immediately set processing flag to prevent parallel processing
     setIsProcessing(true);
     
     try {
-      // Get all messages that this AI should see
+      // Check if this AI has been messaged (AI should only respond when it receives a message)
+      const aiHasMessages = messages.some(m => 
+        m.recipient === ai && 
+        !messages.some(r => r.sender === ai && r.timestamp > m.timestamp)
+      );
+      
+      // Only proceed if the AI has unread messages
+      if (!aiHasMessages) {
+        setIsProcessing(false);
+        return;
+      }
+      
+      // Get messages relevant to this AI
       const aiHistory = messages.filter(
         m => m.sender === ai || m.recipient === ai
-      ).slice(-20); // Limit to last 20 messages
+      ).slice(-20);
       
+      // Get AI response
       const { content, target } = await getAIResponse({
         aiName: ai,
         history: aiHistory
       });
       
-      // Send the AI's message
-      sendMessage(ai, target, content);
+      // IMMEDIATELY deduct token BEFORE sending the message
+      setTokens(prev => ({
+        ...prev,
+        [ai]: Math.max(0, prev[ai] - 1)
+      }));
       
-      // If target is another AI, process their turn next
-      if (target !== 'user' && tokens[target] > 0) {
-        setTimeout(() => processAITurn(target), 1000);
-      }
+      // Add a slight delay to ensure token update happens first
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Then send the message
+      const newMessage: Message = {
+        sender: ai,
+        recipient: target,
+        content: content.trim(),
+        timestamp: Date.now(),
+        isPrivate: target !== 'user'
+      };
+      
+      setMessages(prev => [...prev, newMessage]);
     } catch (error) {
       console.error(`Error processing ${ai} turn:`, error);
     } finally {
+      // Always release processing lock when done
       setIsProcessing(false);
     }
   };
@@ -188,24 +209,32 @@ export default function Home() {
   }, []);
 
   // Process AI turns when they get tokens
+  // Replace the useEffect for AI processing
   useEffect(() => {
-    const processAIs = async () => {
-      // Don't process if we're already processing something
+    const checkForAIMessages = async () => {
       if (isProcessing) return;
       
-      // Process AI 1 if it has tokens and received messages
-      if (tokens['AI 1'] > 0 && messages.some(m => m.recipient === 'AI 1')) {
-        await processAITurn('AI 1');
-      }
+      // Check if any AI has unread messages AND tokens
+      const ai1HasUnreadMessages = messages.some(m => 
+        m.recipient === 'AI 1' && 
+        !messages.some(r => r.sender === 'AI 1' && r.timestamp > m.timestamp)
+      );
       
-      // Process AI 2 if it has tokens and received messages
-      if (tokens['AI 2'] > 0 && messages.some(m => m.recipient === 'AI 2')) {
+      const ai2HasUnreadMessages = messages.some(m => 
+        m.recipient === 'AI 2' && 
+        !messages.some(r => r.sender === 'AI 2' && r.timestamp > m.timestamp)
+      );
+      
+      // Process one AI at a time - not both simultaneously
+      if (tokens['AI 1'] > 0 && ai1HasUnreadMessages) {
+        await processAITurn('AI 1');
+      } else if (tokens['AI 2'] > 0 && ai2HasUnreadMessages) {
         await processAITurn('AI 2');
       }
     };
     
-    processAIs();
-  }, [tokens, isProcessing]);
+    checkForAIMessages();
+  }, [tokens, messages, isProcessing]);
 
   return (
     <div className="min-h-screen bg-gray-100 p-6 space-y-6">
