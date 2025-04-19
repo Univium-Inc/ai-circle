@@ -7,87 +7,73 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse,
+  res: NextApiResponse
 ) {
-  try {
-    const { messages } = req.body; // already in OpenAI chat format
-    
+  // 1) Only allow POST
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
-    // Determine which AI is making the request from the system message
-    const systemMessage = messages.find((msg: { role: string; }) => msg.role === 'system');
-    const systemContent = systemMessage?.content || '';
-    
-    // Find which AI this is based on the system message
-    const allAIs = getAllAINames();
-    const currentAI = allAIs.find(aiName => systemContent.includes(`You are ${aiName}`)) || 'Unknown';
-    
-    console.log('------------------');
-    console.log('currentAI:', currentAI);
-    console.log('Number of messages:', messages.length);
-    console.log('Message Details:');
-    messages.forEach((msg: { role: any; content: any; }, index: any) => {
-      console.log(`Message ${index}:`);
-      console.log('Role:', msg.role);
-      console.log('Content:', msg.content);
-      console.log('---');
+  try {
+    const { messages } = req.body; 
+    if (!Array.isArray(messages)) {
+      return res.status(400).json({ error: '`messages` must be an array' });
+    }
+
+    // 2) Log every incoming message
+    console.log('── Incoming /api/chat Request ──');
+    console.log('Total incoming messages:', messages.length);
+    messages.forEach((msg: any, i: number) => {
+      console.log(`  [${i}] role=${msg.role}  content="${msg.content}"`);
     });
 
-    // Get all other AIs that are not the current one
-    const otherAIs = allAIs.filter(ai => ai !== currentAI);
-    const userName = 'Larry'; // Default user name
+    // 3) Figure out which AI this is
+    const systemMsg = messages.find((m: any) => m.role === 'system')?.content || '';
+    const allAIs     = getAllAINames();
+    const currentAI  = allAIs.find(name => systemMsg.includes(`You are ${name}`)) || 'Unknown';
+    const otherAIs   = allAIs.filter(name => name !== currentAI);
+    const userName   = 'Larry';
 
-    /** system rule that forces the TO/MESSAGE contract */
+    // 4) Re‑inject our forced system instruction
     const forcedFormat = {
       role: 'system' as const,
       content: `
-    You are a participant in "The Circle" style voting competition with multiple participants.
-    
-    IMPORTANT CONTEXT:
-    - You are ${currentAI} with a unique personality
-    - The other AI participants are: ${otherAIs.join(', ')}
-    - The human user is ${userName}
-    - Each participant can only send ONE message per turn
-    - You must carefully review your message history before deciding who to respond to
-    - You CANNOT message yourself - only message other participants
-    - Always be clear and direct
-    - Stay true to your personality in every message
+You are a participant in "The Circle" style voting competition.
+- You are ${currentAI}.
+- The other participants are: ${otherAIs.join(', ')}.
+- The human user is ${userName}.
+- One message per turn; you cannot message yourself.
+FORMAT your reply **exactly** as:
 
-    GOAL:
-    - Your goal is to get other participants to vote for you each turn
-    - Each player can only vote for one other player each turn
-    - You must become friends and gain favorability with the other players
-    - You need to strategize and build alliances to win
-    
-    FORMATTING REQUIREMENTS:
-    Respond in EXACTLY this two-line format:
-    
-    TO: [recipient]
-    MESSAGE: [your message]
-    
-    Rules for [recipient]:
-    - Must be either "${userName}" or one of the other AIs (${otherAIs.join(', ')})
-    - CANNOT be your own name (${currentAI} cannot message itself)
-    - You must choose only ONE recipient
-    
-    Rules for [your message]:
-    - Keep it brief and concise (under 20 words)
-    - Do not repeat the recipient's name in your message
-    - Do not include any additional formatting or metadata
-    - Make sure your message reflects your unique personality
-    
-    NEVER add extra lines or additional information.
-    `,
+TO: <recipient>
+MESSAGE: <your text>
+
+Recipient must be "${userName}" or one of: ${otherAIs.join(', ')}.
+      `.trim()
     };
 
+    // 5) Build the final payload (slice to last 80 messages)
+    const payloadMessages = [forcedFormat, ...messages].slice(-80);
+
+    // 6) Log it so you can inspect
+    console.log('── Payload to OpenAI ──');
+    console.log(JSON.stringify(payloadMessages, null, 2));
+
+    // 7) Call OpenAI
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo-1106',
-      messages: [forcedFormat, ...messages].slice(-80),
+      model:    'gpt-3.5-turbo-1106',
+      messages: payloadMessages
     });
 
     const raw = completion.choices[0]?.message?.content ?? '';
-    res.status(200).json({ raw }); // we return the raw 2‑line text
+    console.log('── Raw AI Response ──');
+    console.log(raw);
+
+    // 8) Return just the 2‑line text
+    return res.status(200).json({ raw });
   } catch (err) {
-    console.error('OpenAI error', err);
-    res.status(500).json({ error: 'OpenAI failed' });
+    console.error('❌ /api/chat error:', err);
+    return res.status(500).json({ error: 'OpenAI request failed' });
   }
 }

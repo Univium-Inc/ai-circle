@@ -1,65 +1,67 @@
 // pages/index.tsx
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { getAIResponse } from '@/lib/AIEngine';
-import { Message, MessageVisibility, Participant, ChatState } from '@/lib/types';
+import {
+  Message,
+  MessageVisibility,
+  Participant,
+  ChatState
+} from '@/lib/types';
 import { AI_PERSONALITIES, getAllAINames } from '@/lib/aiPersonalities';
 import { CollapsibleChat } from '@/components/CollapsibleChat';
 
 export default function Home() {
-  // Helper: only log when Benny is involved
-  const isBenny = (p: Participant) => p === 'Benny';
-
-  // — State Hooks —
-  const [messages, setMessages] = useState<Message[]>([]);
   const aiNames = getAllAINames();
 
+  // — state hooks —
+  const [messages, setMessages] = useState<Message[]>([]);
   const [chatStates, setChatStates] = useState<Record<string, ChatState>>(() => {
-    const init: Record<string, ChatState> = {};
-    aiNames.forEach(name => (init[name] = { expanded: false, input: '' }));
-    return init;
+    const s: Record<string, ChatState> = {};
+    aiNames.forEach(n => { s[n] = { expanded: false, input: '' }; });
+    return s;
   });
-
   const [lastSeen, setLastSeen] = useState<Record<string, number>>(() => {
-    const init: Record<string, number> = {};
-    aiNames.forEach(name => (init[name] = 0));
-    return init;
+    const s: Record<string, number> = {};
+    aiNames.forEach(n => { s[n] = 0; });
+    return s;
   });
-
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
-
   const [tokens, setTokens] = useState<Record<Participant, number>>(() => {
-    const init: Partial<Record<Participant, number>> = { Larry: 1 };
-    aiNames.forEach(name => (init[name as Participant] = 1));
-    return init as Record<Participant, number>;
+    const t: Partial<Record<Participant, number>> = { Larry: 1 };
+    aiNames.forEach(n => { t[n as Participant] = 1; });
+    return t as Record<Participant, number>;
   });
-
   const [turnTimer, setTurnTimer] = useState(30);
   const [isProcessing, setIsProcessing] = useState(false);
   const [turnInProgress, setTurnInProgress] = useState(false);
 
-  // — Benny‐only Logging Hook —
+  // — dynamic per-AI logging hook —
+  const lastLogTimes = useRef<Record<string, number>>(
+    aiNames.reduce((acc, ai) => { acc[ai] = 0; return acc; }, {} as Record<string, number>)
+  );
   useEffect(() => {
-    let lastLog = 0;
-    const logBenny = () => {
+    const logAllAIs = () => {
       const now = Date.now();
-      if (now - lastLog < 15_000) return;
-      const bMsgs = messages.filter(
-        m => m.sender === 'Benny' || m.recipient === 'Benny'
-      );
-      if (!bMsgs.length) return;
-      console.group('Benny Messages Update');
-      console.log('Total Benny-related Messages:', bMsgs.length);
-      console.log('Last 5 Benny Messages:', bMsgs.slice(-5));
-      console.log('Most Recent Benny Message:', bMsgs[bMsgs.length - 1]);
-      console.groupEnd();
-      lastLog = now;
+      aiNames.forEach(ai => {
+        if (now - lastLogTimes.current[ai] < 15_000) return;
+        const aiMsgs = messages.filter(
+          m => m.sender === ai || m.recipient === ai
+        );
+        if (!aiMsgs.length) return;
+        console.group(`${ai} Messages Update`);
+        console.log('Total messages:', aiMsgs.length);
+        console.log('Last 5 messages:', aiMsgs.slice(-5));
+        console.log('Most recent message:', aiMsgs[aiMsgs.length - 1]);
+        console.groupEnd();
+        lastLogTimes.current[ai] = now;
+      });
     };
-    logBenny();
-    const iv = setInterval(logBenny, 15_000);
+    logAllAIs();
+    const iv = setInterval(logAllAIs, 15_000);
     return () => clearInterval(iv);
-  }, [messages]);
+  }, [messages, aiNames]);
 
-  // — Helpers —
+  // — helpers —
   const determineVisibility = (
     sender: Participant,
     recipient: Participant,
@@ -98,68 +100,57 @@ export default function Home() {
     [messages, lastSeen]
   );
 
-  // — Process a single AI turn —
-  const processAIMessage = async (ai: Exclude<Participant, 'Larry'>) => {
-    if (isBenny(ai)) console.group(`Processing for ${ai}`);
-    if (isBenny(ai)) console.log('Messages:', messages);
-
-    if (tokens[ai] <= 0) {
-      if (isBenny(ai)) console.log(`${ai} has no tokens.`);
-      if (isBenny(ai)) console.groupEnd();
-      return false;
-    }
-
+  // — single AI turn —
+  const processAIMessage = async (ai: Exclude<Participant,'Larry'>) => {
+    if (tokens[ai] <= 0) return false;
     setIsProcessing(true);
     try {
       const history = messages
         .filter(m => m.sender === ai || m.recipient === ai)
         .slice(-20);
-      if (isBenny(ai)) console.log(`History length for ${ai}:`, history.length);
+
+      const secretWord = AI_PERSONALITIES.find(p => p.name === ai)
+        ?.secretWord ?? '';
 
       const { content, target } = await getAIResponse({
         aiName: ai,
+        secretWord,
         history,
-        userName: 'Larry',
+        userName: 'Larry'
       });
 
-      const validTarget =
-        target === 'Larry' || (aiNames.includes(target) && target !== ai);
-      const finalTarget = (validTarget ? target : 'Larry') as Participant;
-      const visibility = determineVisibility(ai, finalTarget, content.trim());
+      const finalTarget =
+        target === 'Larry' || (aiNames.includes(target) && target !== ai)
+          ? target
+          : 'Larry';
 
       const newMsg: Message = {
-        sender: ai,
-        recipient: finalTarget,
-        content: content.trim(),
+        sender:    ai,
+        recipient: finalTarget as Participant,
+        content:   content.trim(),
         timestamp: Date.now(),
-        visibility,
+        visibility: determineVisibility(ai, finalTarget as Participant, content)
       };
-
-      if (isBenny(ai)) console.log(`Benny → ${finalTarget}:`, newMsg);
 
       setMessages(prev => [...prev, newMsg]);
       setTokens(prev => ({ ...prev, [ai]: prev[ai] - 1 }));
       return true;
-    } catch (err) {
-      if (isBenny(ai)) console.error(`Error for ${ai}:`, err);
+    } catch {
       return false;
     } finally {
       setIsProcessing(false);
-      if (isBenny(ai)) console.groupEnd();
     }
   };
 
-  // — Process all AI turns —
+  // — all AIs in random order —
   const processTurn = async () => {
     if (turnInProgress) return;
     setTurnInProgress(true);
 
     const order = [...aiNames].sort(() => Math.random() - 0.5);
-    if (order.includes('Benny')) console.log('AI order:', order.join(', '));
-
     for (const ai of order) {
       if (tokens[ai as Participant] > 0) {
-        await processAIMessage(ai as Exclude<Participant, 'Larry'>);
+        await processAIMessage(ai as Exclude<Participant,'Larry'>);
         await new Promise(r => setTimeout(r, 300));
       }
     }
@@ -167,60 +158,61 @@ export default function Home() {
     setTurnInProgress(false);
   };
 
-  // — Send message utility (logs only if Benny is sender or recipient) —
+  // — send message helper —
   const sendMessage = (
     sender: Participant,
     recipient: Participant,
     content: string
   ) => {
-    if (isBenny(sender) || isBenny(recipient)) {
-      console.group('Benny Message');
-      console.log('→', sender, '→', recipient, ':', content);
-      console.groupEnd();
-    }
-
     if (!content.trim() || tokens[sender] <= 0) return;
-
-    const visibility = determineVisibility(sender, recipient, content.trim());
     const msg: Message = {
       sender,
       recipient,
       content: content.trim(),
       timestamp: Date.now(),
-      visibility,
+      visibility: determineVisibility(sender, recipient, content)
     };
-
     setMessages(prev => [...prev, msg]);
     setTokens(prev => ({ ...prev, [sender]: prev[sender] - 1 }));
-
-    if (sender === 'Larry') setTimeout(processTurn, 500);
   };
 
-  // — Handlers —
+  // — trigger AI turn after Larry’s message —
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (last?.sender === 'Larry' && !turnInProgress) {
+      processTurn();
+    }
+  }, [messages, turnInProgress]);
+
+  // — UI handlers —
   const sendToAI = (aiName: string) => {
-    if (isBenny(aiName as Participant)) console.log(`User → ${aiName}`);
     if (tokens.Larry <= 0 || !chatStates[aiName].input.trim()) return;
     sendMessage('Larry', aiName as Participant, chatStates[aiName].input);
     setChatStates(s => ({
       ...s,
-      [aiName]: { ...s[aiName], input: '' },
+      [aiName]: { ...s[aiName], input: '' }
     }));
   };
 
   const toggleChat = (aiName: string) => {
-    if (isBenny(aiName as Participant)) console.log(`Toggle ${aiName}`);
     if (expandedChat === aiName) {
       setExpandedChat(null);
-      setChatStates(s => ({ ...s, [aiName]: { ...s[aiName], expanded: false } }));
+      setChatStates(s => ({
+        ...s,
+        [aiName]: { ...s[aiName], expanded: false }
+      }));
     } else {
       if (expandedChat) {
         setChatStates(s => ({
           ...s,
-          [expandedChat]: { ...s[expandedChat], expanded: false },
+          [expandedChat]: { ...s[expandedChat], expanded: false }
         }));
       }
       setExpandedChat(aiName);
-      setChatStates(s => ({ ...s, [aiName]: { ...s[aiName], expanded: true } }));
+      setChatStates(s => ({
+        ...s,
+        [aiName]: { ...s[aiName], expanded: true }
+      }));
       setLastSeen(ls => ({ ...ls, [aiName]: Date.now() }));
     }
   };
@@ -228,43 +220,42 @@ export default function Home() {
   const handleInputChange = (aiName: string, v: string) =>
     setChatStates(s => ({ ...s, [aiName]: { ...s[aiName], input: v } }));
 
-  // — Token refresh & turn timer —
+  // — token refresh & timer —
   useEffect(() => {
-    const turnIv = setInterval(() => {
+    const iv1 = setInterval(() => {
       setTokens(prev => {
         const next = { ...prev, Larry: prev.Larry + 1 };
         aiNames.forEach(ai => {
           next[ai as Participant] = prev[ai as Participant] + 1;
         });
-        if (isBenny('Benny')) console.log('Tokens refreshed for Benny:', next.Benny);
         return next;
       });
       setTurnTimer(30);
       setTimeout(processTurn, 500);
     }, 30_000);
 
-    const countdownIv = setInterval(() => {
-      setTurnTimer(t => Math.max(0, t - 1));
-    }, 1_000);
-
+    const iv2 = setInterval(() => setTurnTimer(t => Math.max(0, t - 1)), 1_000);
     return () => {
-      clearInterval(turnIv);
-      clearInterval(countdownIv);
+      clearInterval(iv1);
+      clearInterval(iv2);
     };
   }, []);
 
-  // — Render —
+  // — render —
   return (
     <div className="min-h-screen bg-gray-100 p-6 space-y-6">
+      {/* header */}
       <div className="text-center text-sm text-gray-700">
-        <h1 className="text-xl font-bold mb-2">The Circle: AI Edition</h1>
-        ⏳ <strong>Next Turn In:</strong> {turnTimer}s<br/>
-        🎟 <strong>Tokens</strong> — Larry: {tokens.Larry} |{' '}
+        <h1 className="text-xl font-bold mb-2">
+          The Circle: AI Edition
+        </h1>
+        ⏳ Next in: {turnTimer}s &nbsp;|&nbsp; 🎟 Tokens — Larry: {tokens.Larry}
         {aiNames.map(ai => (
-          <span key={ai}>{ai}: {tokens[ai as Participant]} | </span>
+          <span key={ai}> | {ai}: {tokens[ai as Participant]}</span>
         ))}
       </div>
 
+      {/* per‑AI chats */}
       <div className="flex flex-col space-y-2 w-full max-w-2xl mx-auto">
         {aiNames.map(aiName => (
           <CollapsibleChat
@@ -277,7 +268,8 @@ export default function Home() {
             onSend={() => sendToAI(aiName)}
             canSend={tokens.Larry > 0}
             personality={
-              AI_PERSONALITIES.find(a => a.name === aiName)?.shortDescription
+              AI_PERSONALITIES.find(a => a.name === aiName)
+                ?.shortDescription
             }
             isExpanded={chatStates[aiName].expanded}
             onToggleExpand={() => toggleChat(aiName)}
@@ -286,10 +278,11 @@ export default function Home() {
         ))}
       </div>
 
+      {/* AI‑to‑AI monitor */}
       <div className="w-full max-w-2xl mx-auto bg-white shadow rounded p-4 h-[400px] overflow-y-auto">
         <h2 className="text-lg font-bold mb-2">AI Monitor Log</h2>
         <p className="text-xs text-gray-500 mb-2 italic">
-          Watch the AIs interact with each other
+          Watch the AIs interact
         </p>
         {getMonitorMessages().map((m, i) => {
           const idx = AI_PERSONALITIES.findIndex(a => a.name === m.sender);
@@ -302,7 +295,9 @@ export default function Home() {
             <div
               key={i}
               className={`p-2 text-xs rounded my-1 ${bg} ${
-                m.visibility === 'highlighted' ? 'border border-yellow-300' : ''
+                m.visibility === 'highlighted'
+                  ? 'border border-yellow-300'
+                  : ''
               }`}
             >
               <strong>{m.sender} → {m.recipient}:</strong> {m.content}
@@ -311,14 +306,16 @@ export default function Home() {
         })}
       </div>
 
+      {/* debug panel */}
       {process.env.NODE_ENV === 'development' && (
         <div className="w-full max-w-2xl mx-auto mt-4 p-4 bg-gray-800 text-white rounded">
           <h3 className="text-sm font-bold mb-2">Debug Panel</h3>
           <div className="text-xs">
             <div>Expanded Chat: {expandedChat || 'None'}</div>
-            <div>Turn Timer: {turnTimer}s</div>
+            <div>
+              Turn In Progress: {turnInProgress ? 'Yes' : 'No'}
+            </div>
             <div>Processing: {isProcessing ? 'Yes' : 'No'}</div>
-            <div>Turn In Progress: {turnInProgress ? 'Yes' : 'No'}</div>
           </div>
         </div>
       )}
