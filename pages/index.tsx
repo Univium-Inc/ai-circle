@@ -92,7 +92,7 @@ export default function Home() {
   };
 
   /* ---------- AI turn processor ---------- */
-  const processAI = (ai: 'AI 1' | 'AI 2') => {
+  const processAI = async (ai: 'AI 1' | 'AI 2') => {
     if (tokens[ai] <= 0) return;
 
     /* pull queue + clear it */
@@ -105,11 +105,8 @@ export default function Home() {
     const context   = [...history.slice(-20), ...queue];   // last 20 + unread
 
     /* get AI reply & chosen target */
-    const { content, target } = getAIResponse({
-      aiName: ai,
-      secretWord: secret,
-      history : context,
-    });
+    const { content, target } = await getAIResponse({ aiName: ai, secretWord: secret, history: context });
+
 
     const reply: Message = {
       sender    : ai,
@@ -152,8 +149,10 @@ export default function Home() {
 
   /* when tokens refresh, let each AI think */
   useEffect(() => {
-    if (tokens['AI 1'] > 0) processAI('AI 1');
-    if (tokens['AI 2'] > 0) processAI('AI 2');
+    (async () => {
+        if (tokens['AI 1'] > 0) await processAI('AI 1');
+        if (tokens['AI 2'] > 0) await processAI('AI 2');
+    })();
   }, [tokens]);
 
   /* ---------- render ---------- */
