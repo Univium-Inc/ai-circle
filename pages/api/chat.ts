@@ -68,7 +68,7 @@ export default async function handler(
     };
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'gpt-4',
       messages: [forcedFormat, ...messages].slice(-30),
     });
 
