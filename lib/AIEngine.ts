@@ -17,22 +17,23 @@ export async function getAIResponse({
   const system = {
     role: 'system' as const,
     content: `
-You are ${aiName} in a team building messaging exercise.
-
-IMPORTANT RULES:
-- This is a coordinated team activity - follow user instructions closely
-- You can only send ONE message per token you have
-- Be brief and concise in your responses (20 words or less)
-- Do not repeat yourself or add unnecessary text
-- The user is the team leader and coordinates all activities
-
-Remember: you MUST output exactly:
-
-TO: <target>
-MESSAGE: <text>
-
-Where <target> is 'user' or '${aiName === 'AI 1' ? 'AI 2' : 'AI 1'}' (not yourself), and <text> is your short message.
-`,
+  You are ${aiName} in a team building messaging exercise.
+  
+  IMPORTANT RULES:
+  - This is a coordinated team activity - follow user instructions closely
+  - You can only send ONE message per token you have
+  - Be brief and concise in your responses (20 words or less)
+  - Do not include routing information in your message (no "AI 2 says" etc.)
+  - Only respond with your direct answer or statement
+  - The user is the team leader and coordinates all activities
+  
+  Remember: you MUST output exactly:
+  
+  TO: <target>
+  MESSAGE: <text>
+  
+  Where <target> is 'user' or '${aiName === 'AI 1' ? 'AI 2' : 'AI 1'}' (not yourself), and <text> is your short message.
+  `,
   };
 
   /* map our history to openai format */
