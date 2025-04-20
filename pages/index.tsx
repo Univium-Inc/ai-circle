@@ -38,7 +38,7 @@ import type {
   Vote,
   GameState,
   ChatState
-} from '../../lib/types'
+} from '../lib/types'
 
 /* ------------------------------------------------------------------
    ─────────────────────────  Constants  ─────────────────────────────
@@ -109,7 +109,7 @@ interface GameAction {
   payload?: any
 }
 
-function gameReducer (state: GameState & { messages: Message[]; tokens: Record<Participant, number> }, action: GameAction) {
+function gameReducer (state: GameState & { messages: Message[]; tokens: Record<Participant, number>; votingPhase: 'idle' | 'active' }, action: GameAction) {
   switch (action.type) {
     case 'ADD_MESSAGE':
       return { ...state, messages: [...state.messages, action.payload as Message] }
@@ -192,22 +192,22 @@ export default function HomePage () {
   const [chats, dispatchChats] = useReducer(chatStateReducer, initialChatState)
 
   const initialGameState: GameState & { messages: Message[]; tokens: Record<Participant, number>; nextTokenAt: number } = {
-    currentRound: 1,
-    votingPhase: 'idle',
-    votesInRound: [],
-    eliminatedParticipants: [],
-    votingTokensAvailable: Object.fromEntries(aiNames.map(n => [n, false])) as Record<Participant, boolean>,
-    nextVotingTime: now() + VOTING_DELAY_SEC * 1_000,
-    nextEliminationTime: now() + (VOTING_DELAY_SEC + ELIMINATION_DELAY_SEC) * 1_000,
-    messages: [],
-    tokens: initialTokens,
-    nextTokenAt: now() + TURN_DURATION_SEC * 1_000
-  }
+      currentRound: 1,
+      votingPhase: 'idle' as 'idle' | 'active',
+      votesInRound: [],
+      eliminatedParticipants: [],
+      votingTokensAvailable: Object.fromEntries(aiNames.map(n => [n, false])) as Record<Participant, boolean>,
+      nextVotingTime: now() + VOTING_DELAY_SEC * 1_000,
+      nextEliminationTime: now() + (VOTING_DELAY_SEC + ELIMINATION_DELAY_SEC) * 1_000,
+      messages: [],
+      tokens: initialTokens,
+      nextTokenAt: now() + TURN_DURATION_SEC * 1_000
+    }
 
   const [game, dispatchGame] = useReducer(gameReducer, initialGameState)
 
   /* ═════════════════════════  Refs ════════════════════════════════ */
-  const raf = useRef<number>()
+  const raf = useRef<number | null>(null)
 
   /* ═════════════════════════  Core game loop  ═════════════════════ */
   const tick = useCallback(() => {
@@ -240,7 +240,11 @@ export default function HomePage () {
   // start loop once
   useEffect(() => {
     raf.current = requestAnimationFrame(tick)
-    return () => raf.current && cancelAnimationFrame(raf.current)
+    return () => {
+      if (raf.current !== null) {
+        cancelAnimationFrame(raf.current)
+      }
+    }
   }, [tick])
 
   /* ════════════════════════  Helper Functions  ════════════════════ */
@@ -270,15 +274,17 @@ export default function HomePage () {
     const lastIncoming = [...history].reverse().find(m => m.recipient === ai && m.sender !== ai)
 
     const { content, target } = await getAIResponse({
-      aiName: ai,
+      aiName: ai as "Benny" | "Gary" | "Sophie" | "Xander" | "Maya" | "Ethan",
       history,
       userName: 'Larry',
       promptHint: lastIncoming ? `${lastIncoming.sender} asked: “${lastIncoming.content}”` : undefined,
       gameState: game as GameState
     })
 
-    const validatedTarget =
-      target === 'Larry' || (!game.eliminatedParticipants.includes(target as Participant) ? (target as Participant) : 'Larry')
+    const validatedTarget: Participant =
+      target === 'Larry' || (typeof target === 'string' && !game.eliminatedParticipants.includes(target as Participant)) 
+        ? (target as Participant) 
+        : 'Larry';
 
     addMessage({
       sender: ai,

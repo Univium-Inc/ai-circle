@@ -43,12 +43,13 @@ export type ChatState = {
 };
 
 // Game state for voting mechanism
-export type GameState = {
+export interface GameState {
   currentRound: number;
-  votingTokensAvailable: Record<Participant, boolean>;
+  votingPhase: 'idle' | 'active';
   votesInRound: Vote[];
   eliminatedParticipants: Participant[];
-  votingPhase: 'idle' | 'active';
+  votingTokensAvailable: Record<Participant, boolean>;
   nextVotingTime: number;
   nextEliminationTime: number;
-};
+  nextTokenAt: number; // Added this property
+}

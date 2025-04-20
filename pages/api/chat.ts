@@ -12,7 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import OpenAI from 'openai'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-const MODEL  = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+const MODEL  = process.env.OPENAI_MODEL || 'gpt-3'
 
 export default async function handler (req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
