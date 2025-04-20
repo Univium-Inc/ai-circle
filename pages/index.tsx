@@ -29,8 +29,8 @@
 */
 
 import { useCallback, useEffect, useReducer, useRef } from 'react'
-import { getAIResponse } from '../../lib/AIEngine'
-import { AI_PERSONALITIES, getAllAINames } from '../../lib/aiPersonalities'
+import { getAIResponse } from '../lib/AIEngine'
+import { AI_PERSONALITIES, getAllAINames } from '../lib/aiPersonalities'
 import { CollapsibleChat } from '../components/CollapsibleChat'
 import type {
   Message,
