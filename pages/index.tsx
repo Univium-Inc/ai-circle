@@ -857,16 +857,17 @@ const processElimination = useCallback(() => {
         </div>
         
         {/* Vote counting display during voting */}
-        {/* Vote counting display during voting */}
         {gameState.votingPhase === 'active' && gameState.votesInRound.length > 0 && (
           <div className="mb-3 p-2 bg-gray-100 rounded">
             <h3 className="text-sm font-bold mb-1">Current Votes:</h3>
             <div className="grid grid-cols-2 gap-2">
-              {gameState.votesInRound.map((vote, idx) => (
-                <div key={idx} className="text-xs">
-                  <strong>{vote.voter}</strong> voted for <strong className="text-red-500">{vote.votedFor}</strong>
-                </div>
-              ))}
+              {gameState.votesInRound
+                .filter(vote => vote.round === gameState.currentRound) // Add this filter
+                .map((vote, idx) => (
+                  <div key={idx} className="text-xs">
+                    <strong>{vote.voter}</strong> voted for <strong className="text-red-500">{vote.votedFor}</strong>
+                  </div>
+                ))}
             </div>
           </div>
         )}
