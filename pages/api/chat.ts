@@ -62,7 +62,7 @@ Recipient must be "${userName}" or one of: ${otherAIs.join(', ')}.
 
     // 7) Call OpenAI
     const completion = await openai.chat.completions.create({
-      model:    'gpt-3.5-turbo-1106',
+      model:    'gpt-4o',
       messages: payloadMessages
     });
 

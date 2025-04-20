@@ -101,11 +101,10 @@ export default function Home() {
   );
 
   // — single AI turn —
-  const processAIMessage = useCallback(
-    async (ai: Exclude<Participant,'Larry'>) => {
-    if (tokens[ai] <= 0) return false;
-    setIsProcessing(true);
-    try {
+const processAIMessage = useCallback(
+      async (ai: Exclude<Participant,'Larry'>) => {
+        setIsProcessing(true);
+        try {
       const history = messages
         .filter(m => m.sender === ai || m.recipient === ai)
         .slice(-20);
@@ -132,35 +131,40 @@ export default function Home() {
       };
 
       setMessages(prev => [...prev, newMsg]);
-      setTokens(prev => ({ ...prev, [ai]: prev[ai] - 1 }));
       return true;
-    } catch {
-      return false;
-    } finally {
-      setIsProcessing(false);
-    }
-    },
-    [messages, tokens] // <-- now `history` will always see the latest `messages`
-  );
+     } catch {
+       return false;
+     } finally {
+       setIsProcessing(false);
+     }
+   },
+   [messages]
+ );
 
   // — all AIs in random order —
   const processTurn = useCallback(
-    async () => {
-    if (turnInProgress) return;
-    setTurnInProgress(true);
-
-    const order = [...aiNames].sort(() => Math.random() - 0.5);
-    for (const ai of order) {
-      if (tokens[ai as Participant] > 0) {
-        await processAIMessage(ai as Exclude<Participant,'Larry'>);
-        await new Promise(r => setTimeout(r, 300));
-      }
-    }
-
-    setTurnInProgress(false);
-  },
-  [aiNames, tokens, processAIMessage, turnInProgress]
-);
+      async () => {
+        if (turnInProgress) return;
+        setTurnInProgress(true);
+    
+        // Copy tokens so we can spend them immediately
+        const available = { ...tokens };
+        const order = [...aiNames].sort(() => Math.random() - 0.5);
+    
+        for (const ai of order) {
+          if (available[ai as Participant] > 0) {
+            available[ai as Participant]--;
+            await processAIMessage(ai as Exclude<Participant,'Larry'>);
+            await new Promise(r => setTimeout(r, 300));
+          }
+        }
+    
+        // Commit the spent tokens back to state in one go
+        setTokens(available);
+        setTurnInProgress(false);
+      },
+       [aiNames, tokens, processAIMessage, turnInProgress]
+     );
 
   // — send message helper —
   const sendMessage = (
