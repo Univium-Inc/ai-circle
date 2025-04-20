@@ -1,17 +1,21 @@
-# AI Debate App
+# AI Debate Game
 
-A minimal Next.js app that lets two AIs debate a topic in real‑time.
+A Next.js 14 app where **six AI debaters with distinct personalities** argue a topic, then vote to eliminate one contestant each round.
 
-## Quick Start
+## Phases
+1. **Discussion** (2 min) – All active debaters speak every 10 s.
+2. **Voting** – Each AI outputs `VOTE: Name` and a short reason.
+3. **Results** – Tallies votes and eliminates the top‑voted player.
+4. Loops until two finalists remain.
+
+## Quick start
 
 ```bash
-git clone <your‑repo>
-cd ai-debate-app
-cp .env.local.example .env.local   # add your OpenAI key
+git clone <repo>
+cd ai-debate-game
+cp .env.local.example .env.local  # add your OpenAI key
 npm install
 npm run dev
 ```
 
-Deploy to Vercel by importing the repo – the `OPENAI_API_KEY` env var must be set in the Vercel dashboard.
-
----
+Deploy on Vercel → add the env var `OPENAI_API_KEY`.
