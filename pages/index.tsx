@@ -479,229 +479,291 @@ RULES:
     setRound(1);
   };
 
-  /* ================ INSTRUCTIONS FOR INSTALLING MATERIAL UI ================ */
-  /*
-    To install Material UI in your Next.js project, run the following commands:
-    
-    npm install @mui/material @emotion/react @emotion/styled
-    npm install @mui/icons-material
-    
-    If you're using the App Router (Next.js 13+), also install:
-    npm install @mui/material-nextjs
-    
-    Then follow the setup instructions for your Next.js version in the Material UI documentation.
-  */
-  
   /* ================ RENDER ================ */
   return (
-    <main className="max-w-6xl mx-auto p-4 md:p-8 min-h-screen bg-gray-900 text-white">
-      {/* Header */}
-      <header className="mb-6">
-        <h1 className="text-3xl md:text-4xl font-bold mb-2">Social Elimination – AI Edition</h1>
-        <p className="text-gray-400">A reality-style elimination game where AI characters discuss and vote each other out.</p>
-      </header>
+    <main className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 text-white">
+      {/* Top Navigation Bar */}
+      <nav className="bg-black bg-opacity-40 backdrop-blur-sm border-b border-gray-700 p-4 sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto flex justify-between items-center">
+          <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
+            Social Elimination – AI Edition
+          </h1>
+          
+          {phase !== "setup" && (
+            <div className="flex gap-2">
+              <button 
+                className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                onClick={skipPhase}
+                disabled={phase === "elimination" || phase === "end" || isProcessing}
+              >
+                Skip Phase
+              </button>
+              <button 
+                className="px-3 py-2 bg-red-600 hover:bg-red-700 rounded-md transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                onClick={resetGame}
+                disabled={isProcessing}
+              >
+                Reset Game
+              </button>
+            </div>
+          )}
+        </div>
+      </nav>
       
-      {/* Game Controls */}
-      <div className="mb-6 flex flex-wrap gap-3">
+      <div className="max-w-6xl mx-auto p-4 md:p-6">
         {phase === "setup" ? (
-          <button 
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors" 
-            onClick={startGame}
-          >
-            Start Game
-          </button>
-        ) : (
-          <>
-            <button 
-              className="px-4 py-2 bg-gray-700 text-white rounded-md hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" 
-              onClick={skipPhase}
-              disabled={phase === "elimination" || phase === "end" || isProcessing}
-            >
-              Skip Phase
-            </button>
-            <button 
-              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" 
-              onClick={resetGame}
-              disabled={isProcessing}
-            >
-              Reset Game
-            </button>
-          </>
-        )}
-      </div>
-      
-      {/* Game Info */}
-      {phase !== "setup" && (
-        <div className="mb-6 p-4 bg-gray-800 rounded-lg shadow-md">
-          <div className="flex flex-wrap gap-4">
-            {/* Round and Phase */}
-            <div className="min-w-32">
-              <div className="text-sm text-gray-400">Round</div>
-              <div className="text-xl font-bold">{round}</div>
-              <div className="mt-1 text-sm text-gray-400">Phase</div>
-              <div className="font-medium capitalize">{phase}</div>
+          /* Game Start Screen */
+          <div className="h-[80vh] flex flex-col items-center justify-center">
+            <div className="text-center mb-10">
+              <h2 className="text-4xl md:text-5xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500">
+                Welcome to Social Elimination
+              </h2>
+              <p className="text-xl text-gray-300 max-w-2xl mx-auto">
+                A reality-style game where AI characters discuss strategy and vote each other out until only the finalists remain.
+              </p>
             </div>
             
-            {/* Timer */}
-            <div className="flex-1 min-w-32">
-              <div className="text-sm text-gray-400">Time Remaining</div>
-              <div className="text-xl font-bold">{formatTime(timeLeft)}</div>
-              <div className="w-full h-2 bg-gray-700 rounded mt-2 overflow-hidden">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
+              {PLAYERS.map(player => (
                 <div 
-                  className="h-full bg-blue-500 transition-all duration-1000 ease-linear"
-                  style={{
-                    width: `${(timeLeft / (phase === "discussion" ? gameConfig.DISCUSSION_MS : gameConfig.VOTING_MS)) * 100}%`
-                  }}
-                ></div>
+                  key={player.name}
+                  className="p-4 rounded-lg border border-gray-700 bg-gray-800 bg-opacity-50 flex items-center space-x-3"
+                >
+                  <div 
+                    className="w-10 h-10 rounded-full flex items-center justify-center text-xl font-bold"
+                    style={{ backgroundColor: player.color }}
+                  >
+                    {player.avatar}
+                  </div>
+                  <div>
+                    <div className="font-bold">{player.name}</div>
+                    <div className="text-sm text-gray-400 truncate">{player.persona.split(' ').slice(0, 5).join(' ')}...</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            <button 
+              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-xl font-bold rounded-lg shadow-xl transition-all hover:scale-105"
+              onClick={startGame}
+            >
+              Start Game
+            </button>
+          </div>
+        ) : (
+          /* Game in Progress UI */
+          <>
+            {/* Game Status Panel */}
+            <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Round & Phase */}
+              <div className="bg-gray-800 bg-opacity-50 border border-gray-700 rounded-lg p-4 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-indigo-600 flex items-center justify-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-400">Round & Phase</div>
+                    <div className="text-xl font-bold">{round} • <span className="capitalize">{phase}</span></div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Timer */}
+              <div className="bg-gray-800 bg-opacity-50 border border-gray-700 rounded-lg p-4 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm text-gray-400">Time Remaining</div>
+                    <div className="text-xl font-bold">{formatTime(timeLeft)}</div>
+                    <div className="w-full h-2 bg-gray-700 rounded-full mt-2 overflow-hidden">
+                      <div 
+                        className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-1000 ease-linear"
+                        style={{
+                          width: `${(timeLeft / (phase === "discussion" ? gameConfig.DISCUSSION_MS : gameConfig.VOTING_MS)) * 100}%`
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Players */}
+              <div className="bg-gray-800 bg-opacity-50 border border-gray-700 rounded-lg p-4 shadow-lg">
+                <div className="text-sm text-gray-400 mb-2">Players</div>
+                <div className="flex flex-wrap gap-2">
+                  {live.map(name => {
+                    const player = getPlayer(name);
+                    return (
+                      <div 
+                        key={name}
+                        className="flex items-center px-2 py-1 rounded-full shadow-sm"
+                        style={{ backgroundColor: `${player.color}33`, borderLeft: `3px solid ${player.color}` }}
+                      >
+                        <span 
+                          className="w-6 h-6 rounded-full inline-flex items-center justify-center text-sm font-bold mr-1"
+                          style={{ backgroundColor: player.color }}
+                        >
+                          {player.avatar}
+                        </span>
+                        <span>{name}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                {eliminated.length > 0 && (
+                  <>
+                    <div className="text-sm text-gray-400 mt-3 mb-2">Eliminated</div>
+                    <div className="flex flex-wrap gap-2">
+                      {eliminated.map(name => {
+                        const player = getPlayer(name);
+                        return (
+                          <div 
+                            key={name}
+                            className="flex items-center px-2 py-1 rounded-full opacity-60 line-through shadow-sm"
+                            style={{ backgroundColor: `${player.color}22`, borderLeft: `3px solid ${player.color}` }}
+                          >
+                            <span 
+                              className="w-6 h-6 rounded-full inline-flex items-center justify-center text-sm font-bold mr-1"
+                              style={{ backgroundColor: player.color }}
+                            >
+                              {player.avatar}
+                            </span>
+                            <span>{name}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
             
-            {/* Players */}
-            <div className="min-w-48">
-              <div className="text-sm text-gray-400 mb-1">Players</div>
-              <div className="flex flex-wrap gap-1">
-                {live.map(name => {
-                  const player = getPlayer(name);
+            {/* Messages - modern chat interface with newest at top */}
+            <div className="bg-gray-800 bg-opacity-30 border border-gray-700 rounded-lg shadow-lg h-[60vh] overflow-y-auto">
+              <div className="flex flex-col-reverse p-4 space-y-reverse space-y-4">
+                {msgs.map((msg, index) => {
+                  const isHost = msg.speaker === "Host";
+                  const player = isHost ? null : getPlayer(msg.speaker);
+                  
+                  // Check for vote messages
+                  const isVoteMessage = msg.content.includes("VOTE:") && msg.content.includes("REASON:");
+                  let votedFor = "";
+                  let voteReason = "";
+                  
+                  if (isVoteMessage) {
+                    const voteMatch = msg.content.match(/VOTE:\s*(\w+)/i);
+                    const reasonMatch = msg.content.match(/REASON:\s*(.*?)(?:\n|$)/i);
+                    
+                    votedFor = voteMatch ? voteMatch[1] : "Unknown";
+                    voteReason = reasonMatch ? reasonMatch[1] : "";
+                  }
+                  
                   return (
                     <div 
-                      key={name}
-                      className="inline-flex items-center px-2 py-1 rounded-full text-sm"
-                      style={{ backgroundColor: `${player.color}33` }}
+                      key={index}
+                      className={`rounded-lg shadow-md transition-all duration-300 animate-fadeIn ${isHost ? 'bg-gradient-to-r from-gray-700 to-gray-800' : 'bg-gray-800'}`}
+                      style={!isHost ? { borderLeft: `4px solid ${player?.color}` } : {}}
                     >
-                      <span 
-                        className="w-5 h-5 rounded-full inline-flex items-center justify-center mr-1 text-xs font-bold"
-                        style={{ backgroundColor: player.color }}
-                      >
-                        {player.avatar}
-                      </span>
-                      {name}
+                      <div className="p-3">
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="flex items-center">
+                            {isHost ? (
+                              <span className="px-2 py-1 bg-purple-600 bg-opacity-40 text-purple-300 rounded-md text-sm font-medium">HOST</span>
+                            ) : (
+                              <div 
+                                className="flex items-center gap-2"
+                              >
+                                <span 
+                                  className="w-7 h-7 rounded-full inline-flex items-center justify-center text-sm font-bold"
+                                  style={{ backgroundColor: player?.color }}
+                                >
+                                  {player?.avatar}
+                                </span>
+                                <span className="font-medium">{msg.speaker}</span>
+                              </div>
+                            )}
+                          </div>
+                          <span className="text-xs text-gray-400">
+                            {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                          </span>
+                        </div>
+                        
+                        {isVoteMessage ? (
+                          <div className="ml-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="font-semibold">Votes for:</span>
+                              <div 
+                                className="inline-flex items-center px-2 py-0.5 rounded-full text-sm"
+                                style={{ backgroundColor: `${getPlayer(votedFor).color}33` }}
+                              >
+                                <span 
+                                  className="w-5 h-5 rounded-full inline-flex items-center justify-center mr-1 text-xs font-bold"
+                                  style={{ backgroundColor: getPlayer(votedFor).color }}
+                                >
+                                  {getPlayer(votedFor).avatar}
+                                </span>
+                                {votedFor}
+                              </div>
+                            </div>
+                            <div className="text-gray-300">{voteReason}</div>
+                          </div>
+                        ) : (
+                          <div className="text-gray-300 ml-1">{msg.content}</div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
+                <div ref={messagesEndRef}></div>
               </div>
-              
-              {eliminated.length > 0 && (
-                <>
-                  <div className="text-sm text-gray-400 mt-3 mb-1">Eliminated</div>
-                  <div className="flex flex-wrap gap-1">
-                    {eliminated.map(name => {
-                      const player = getPlayer(name);
-                      return (
-                        <div 
-                          key={name}
-                          className="inline-flex items-center px-2 py-1 rounded-full text-sm opacity-60 line-through"
-                          style={{ backgroundColor: `${player.color}33` }}
-                        >
-                          <span 
-                            className="w-5 h-5 rounded-full inline-flex items-center justify-center mr-1 text-xs font-bold"
-                            style={{ backgroundColor: player.color }}
-                          >
-                            {player.avatar}
-                          </span>
-                          {name}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
             </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Messages - reversed order with newest at the top */}
-      <div className="bg-gray-800 rounded-lg shadow-lg p-4 h-[60vh] overflow-y-auto">
-        <div className="flex flex-col-reverse">
-          {msgs.map((msg, index) => {
-            const isHost = msg.speaker === "Host";
-            const player = isHost ? null : getPlayer(msg.speaker);
-            const bgColor = isHost ? 'bg-gray-700' : `bg-opacity-20`;
             
-            // Check for vote messages
-            const isVoteMessage = msg.content.includes("VOTE:") && msg.content.includes("REASON:");
-            let votedFor = "";
-            let voteReason = "";
-            
-            if (isVoteMessage) {
-              const voteMatch = msg.content.match(/VOTE:\s*(\w+)/i);
-              const reasonMatch = msg.content.match(/REASON:\s*(.*?)(?:\n|$)/i);
-              
-              votedFor = voteMatch ? voteMatch[1] : "Unknown";
-              voteReason = reasonMatch ? reasonMatch[1] : "";
-            }
-            
-            return (
-              <div 
-                key={index}
-                className={`mb-4 p-3 rounded-lg ${isHost ? 'bg-gray-700' : ''}`}
-                style={!isHost ? { backgroundColor: `${player?.color}22` } : {}}
-              >
-                <div className="flex justify-between mb-2">
-                  <div className="flex items-center">
-                    {isHost ? (
-                      <span className="bg-purple-600 text-white px-2 py-0.5 rounded-md text-sm font-medium">HOST</span>
-                    ) : (
-                      <div 
-                        className="flex items-center gap-2"
-                      >
-                        <span 
-                          className="w-6 h-6 rounded-full inline-flex items-center justify-center text-sm font-bold"
-                          style={{ backgroundColor: player?.color }}
-                        >
-                          {player?.avatar}
-                        </span>
-                        <span className="font-medium">{msg.speaker}</span>
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-xs text-gray-400">
-                    {new Date(msg.timestamp).toLocaleTimeString()}
-                  </span>
-                </div>
-                
-                {isVoteMessage ? (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="font-semibold">Votes for:</span>
-                      <div 
-                        className="inline-flex items-center px-2 py-0.5 rounded-full text-sm"
-                        style={{ backgroundColor: `${getPlayer(votedFor).color}33` }}
-                      >
-                        <span 
-                          className="w-4 h-4 rounded-full inline-flex items-center justify-center mr-1 text-xs font-bold"
-                          style={{ backgroundColor: getPlayer(votedFor).color }}
-                        >
-                          {getPlayer(votedFor).avatar}
-                        </span>
-                        {votedFor}
-                      </div>
+            {/* Game Over Screen */}
+            {phase === "end" && (
+              <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-20 backdrop-blur-sm">
+                <div className="bg-gradient-to-b from-gray-800 to-gray-900 border border-gray-700 rounded-lg p-8 shadow-2xl max-w-md w-full text-center">
+                  <h2 className="text-3xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-yellow-500">Game Over!</h2>
+                  <div className="mb-6">
+                    <p className="text-xl text-gray-300 mb-2">The finalists are:</p>
+                    <div className="flex justify-center gap-4 mt-4">
+                      {live.map(name => {
+                        const player = getPlayer(name);
+                        return (
+                          <div 
+                            key={name}
+                            className="flex flex-col items-center"
+                          >
+                            <div 
+                              className="w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold shadow-lg mb-2"
+                              style={{ backgroundColor: player.color }}
+                            >
+                              {player.avatar}
+                            </div>
+                            <span className="font-bold text-xl">{name}</span>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div className="text-gray-200">{voteReason}</div>
                   </div>
-                ) : (
-                  <div className="text-gray-200">{msg.content}</div>
-                )}
+                  <button 
+                    className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-lg font-bold rounded-lg shadow-xl transition-all hover:scale-105 w-full"
+                    onClick={resetGame}
+                  >
+                    Play Again
+                  </button>
+                </div>
               </div>
-            );
-          })}
-          <div ref={messagesEndRef}></div>
-        </div>
+            )}
+          </>
+        )}
       </div>
-      
-      {/* Game Over Screen */}
-      {phase === "end" && (
-        <div className="mt-6 p-6 bg-gray-800 rounded-lg shadow-lg text-center">
-          <h2 className="text-2xl font-bold mb-2">Game Over!</h2>
-          <div className="text-xl mb-4">Finalists: {live.join(" & ")}</div>
-          <button 
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-            onClick={resetGame}
-          >
-            Play Again
-          </button>
-        </div>
-      )}
     </main>
   );
 }
