@@ -372,8 +372,15 @@ const processElimination = useCallback(() => {
   useEffect(() => {
     if (gameState.votingPhase !== 'active') return;
     
+    // Process each message only once for voting
+    const processedVoteMessages = new Set<string>();
+    
     // Check for new votes in messages
     messages.forEach(message => {
+      // Skip if we've already processed this message for voting
+      const messageId = `${message.sender}-${message.timestamp}`;
+      if (processedVoteMessages.has(messageId)) return;
+      
       const vote = parseVoteFromMessage(message);
       if (vote) {
         // Check if this AI has already voted in this round
@@ -386,6 +393,7 @@ const processElimination = useCallback(() => {
         
         if (!hasVoted && hasToken) {
           console.log(`Recorded vote: ${vote.voter} voted to eliminate ${vote.votedFor}`);
+          processedVoteMessages.add(messageId);
           
           // Add vote and remove token
           setGameState(prev => {
