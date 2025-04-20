@@ -333,7 +333,7 @@ const processElimination = useCallback(() => {
       ...prev,
       votingTokensAvailable: votingTokens,
       votingPhase: 'active',
-      currentRound: prev.currentRound + 1,
+      votesInRound: [],
       nextEliminationTime: Date.now() + 120000 // Elimination in 2 minutes
     }));
     
