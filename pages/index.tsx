@@ -1,13 +1,14 @@
-// pages/index.tsx – prevents phantom names by enforcing allowed list
+// pages/index.tsx – Host now stirs the pot with provocative commentary
 "use client";
 import { useEffect, useRef, useState } from "react";
 
 const OPENAI_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY ?? "";
-const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
+const OPENAI_EP  = "https://api.openai.com/v1/chat/completions";
 
-const DISCUSSION_LEN = 2 * 60 * 1000;
-const VOTING_LEN     = 2 * 60 * 1000;
-const TURN_MS        = 5 * 1000;
+const DISCUSSION_MS = 2 * 60 * 1000; // 2‑min chat
+const VOTING_MS     = 2 * 60 * 1000; // voting (cancellable)
+const TURN_MS       = 5 * 1000;      // one speaker every 5 s
+const HOST_MS       = 30 * 1000;     // host stirs every 30 s
 
 const PLAYERS = [
   { name: "Alice",  persona: "Outgoing optimist who trusts gut feelings." },
@@ -18,7 +19,7 @@ const PLAYERS = [
   { name: "Felix",  persona: "Tech futurist who loves disruption." }
 ] as const;
 
-type Phase = "idle" | "discussion" | "voting" | "results" | "end";
+type Phase = "idle" | "discussion" | "voting" | "end";
 interface Msg { speaker: string; content: string; }
 
 export default function Home() {
@@ -26,97 +27,114 @@ export default function Home() {
   const [round, setRound] = useState(1);
   const [live, setLive]   = useState<string[]>(PLAYERS.map(p => p.name));
   const [msgs, setMsgs]   = useState<Msg[]>([]);
-  const [timeLeft, setTL] = useState(0);
-  const turnPtr           = useRef(0);
-  const countdownRef      = useRef<NodeJS.Timeout>();
-  const turnRef           = useRef<NodeJS.Timeout>();
+  const [tLeft, setTLeft] = useState(0);
 
-  /* utils */
+  const turnPtr   = useRef(0);
+  const phaseRef  = useRef<NodeJS.Timeout>();   // countdown per phase
+  const turnRef   = useRef<NodeJS.Timeout>();   // player speaking cadence
+  const hostRef   = useRef<NodeJS.Timeout>();   // host commentary cadence
+
+  /* ---------------- helpers ---------------- */
   const fmt = (ms:number)=>`${Math.floor(ms/60000)}:${String(Math.floor(ms/1000)%60).padStart(2,"0")}`;
 
-  const startTimer = (dur:number,next:Phase)=>{
-    setTL(dur); clearInterval(countdownRef.current!);
-    const t0=Date.now();
-    countdownRef.current=setInterval(()=>{
-      const rem=Math.max(0,dur-(Date.now()-t0));
-      setTL(rem);
-      if(rem===0){clearInterval(countdownRef.current!);setPhase(next);} },1000);
+  const startCountdown = (dur:number,next:Phase)=>{
+    clearInterval(phaseRef.current!);
+    setTLeft(dur);
+    const t0 = Date.now();
+    phaseRef.current = setInterval(()=>{
+      const rem = Math.max(0,dur - (Date.now()-t0));
+      setTLeft(rem);
+      if(rem===0){clearInterval(phaseRef.current!);setPhase(next);} }, 1000);
   };
 
-  /** Prevent hallucinated names by telling the model the allowed list & filtering history */
-  const promptAI = async (speaker:string, curPhase:"discussion"|"voting")=>{
-    if(!OPENAI_KEY){console.error("NEXT_PUBLIC_OPENAI_API_KEY missing");return;}
-    const persona=PLAYERS.find(p=>p.name===speaker)?.persona||"";
-    const allowed=live.join(", ");
-    const sys=`You are ${speaker}, ${persona} Current players: ${allowed}. ONLY reference, discuss, or vote for names in that list. If you mention a player, it must be one of exactly those names. Do NOT invent new names.`;
-
-    const phasePrompt = curPhase==="discussion"
-      ? `Discussion phase: in ≤120 words, persuade the group who to vote out. Reference prior arguments **only** if those arguments mention valid player names.`
-      : `Voting phase: reply in exactly TWO lines:\nVOTE: <Name from list>\nREASON: <brief>. Choices: ${live.filter(n=>n!==speaker).join(", ")}`;
-
-    // recent context limited to host + valid player messages (drops ones with fake names)
-    const recent=msgs.filter(m=>m.speaker==="Host"||live.includes(m.speaker)).slice(-30);
-
+  /* ---------- OpenAI helpers ---------- */
+  const callOpenAI = async (sysPrompt:string, conversation:any[])=>{
+    if(!OPENAI_KEY){console.error("NEXT_PUBLIC_OPENAI_API_KEY missing");return "";}
     const body={
       model:"gpt-3.5-turbo-0125",
       temperature:0.8,
-      messages:[
-        {role:"system",content:sys+" "+phasePrompt},
-        ...recent.map(m=>({role:m.speaker===speaker?"assistant":"user",content:m.content}))
-      ]
+      messages:[{role:"system",content:sysPrompt},...conversation]
     } as const;
-
     try{
-      const r=await fetch(OPENAI_ENDPOINT,{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${OPENAI_KEY}`},body:JSON.stringify(body)});
-      const data=await r.json();
-      const content=(data?.choices?.[0]?.message?.content??"").trim();
-      if(content)setMsgs(p=>[...p,{speaker,content}]);
-    }catch(e){console.error(e);} };
+      const r=await fetch(OPENAI_EP,{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${OPENAI_KEY}`},body:JSON.stringify(body)});
+      const d=await r.json();
+      return (d?.choices?.[0]?.message?.content??"").trim();
+    }catch(e){console.error(e);return "";}
+  };
 
-  /* phase flow */
+  const aiSpeak = async (speaker:string, curPhase:"discussion"|"voting")=>{
+    const persona=PLAYERS.find(p=>p.name===speaker)?.persona||"";
+    const allowed=live.join(", ");
+    const sys=`You are ${speaker}, ${persona} Current players: ${allowed}. Only mention names in that list.`;
+    const prompt=curPhase==="discussion"
+      ? "Discussion phase: in ≤120 words, argue who should be voted out and why. Reference valid earlier arguments if useful."
+      : `Voting phase: reply in exactly two lines:\nVOTE: <Name from list>\nREASON: <brief>. Choices: ${live.filter(n=>n!==speaker).join(", ")}`;
+
+    const recent=msgs.filter(m=>m.speaker==="Host"||live.includes(m.speaker)).slice(-30);
+    const conversation=[...recent.map(m=>({role:m.speaker===speaker?"assistant":"user",content:m.content})),{role:"user",content:prompt}];
+    const response=await callOpenAI(sys,conversation);
+    if (response) setMsgs(prev => [...prev, { speaker, content: response }]);
+  };
+
+  const hostSpeak = async ()=>{
+    const allowed=live.join(", ");
+    const sys="You are the HOST of a reality elimination game. Your goal is to provoke discussion with spicy rumors, praise, or criticism about the **current players**."+
+      " NEVER mention names outside this list: "+allowed+". Keep it to ≤60 words.";
+    const recent=msgs.slice(-20).map(m=>({role:m.speaker==="Host"?"assistant":"user",content:m.content}));
+    const response=await callOpenAI(sys,recent);
+    if(response)setMsgs(p=>[...p,{speaker:"Host",content:response}]);
+  };
+
+  /* ------------- PHASE MACHINE ------------- */
   useEffect(()=>{
     if(phase==="idle"||phase==="end")return;
 
     if(phase==="discussion"){
-      turnPtr.current=0; promptAI(live[0],"discussion");
+      // player cadence
+      turnPtr.current=0;
+      aiSpeak(live[0],"discussion");
       turnRef.current=setInterval(()=>{
         turnPtr.current=(turnPtr.current+1)%live.length;
-        promptAI(live[turnPtr.current],"discussion");
+        aiSpeak(live[turnPtr.current],"discussion");
       },TURN_MS);
-      startTimer(DISCUSSION_LEN,"voting");
-      return()=>clearInterval(turnRef.current!);
+      // host commentary cadence
+      hostSpeak();
+      hostRef.current=setInterval(hostSpeak,HOST_MS);
+
+      startCountdown(DISCUSSION_MS,"voting");
+      return()=>{clearInterval(turnRef.current!);clearInterval(hostRef.current!);} ;
     }
 
     if(phase==="voting"){
-      clearInterval(turnRef.current!);
+      clearInterval(turnRef.current!);clearInterval(hostRef.current!);
       (async()=>{
         const tally:Record<string,number>={};
-        for(const voter of live){await promptAI(voter,"voting");await new Promise(r=>setTimeout(r,TURN_MS));}
+        for(const voter of live){await aiSpeak(voter,"voting");await new Promise(r=>setTimeout(r,TURN_MS));}
         setMsgs(prev=>{
           const slice=[...prev];
-          const votes=slice.slice(-live.length);
-          votes.forEach(m=>{const mt=m.content.match(/VOTE:\s*(\w+)/i);if(mt)tally[mt[1]]=(tally[mt[1]]||0)+1;});
-          let out="",max=-1;Object.entries(tally).forEach(([n,c])=>{if(c>max){out=n;max=c;}});
+          const last=slice.slice(-live.length);
+          last.forEach(m=>{const mt=m.content.match(/VOTE:\s*(\w+)/i);if(mt)tally[mt[1]]=(tally[mt[1]]||0)+1;});
+          let out="",max=-1;Object.entries(tally).forEach(([n,c])=>{if(c>max){max=c;out=n;}});
           slice.push({speaker:"Host",content:`⌛ ${out} is eliminated with ${max} vote(s).`});
           setLive(l=>l.filter(n=>n!==out));
-          return slice;});})();
-      startTimer(VOTING_LEN,"results");
-    }
-
-    if(phase==="results"){
-      startTimer(15000,live.length<=2?"end":"discussion");
-      if(live.length<=2)setMsgs(p=>[...p,{speaker:"Host",content:`🏆 Finalists: ${live.join(" & ")}`}]);
-      else setRound(r=>r+1);
+          return slice;});
+        clearInterval(phaseRef.current!);
+        if(live.length<=2){setMsgs(p=>[...p,{speaker:"Host",content:`🏆 Finalists: ${live.join(" & ")}`}]);setPhase("end");}
+        else{setRound(r=>r+1);setPhase("discussion");}
+      })();
+      startCountdown(VOTING_MS,"discussion");
     }
   },[phase]);
 
-  const startGame=()=>{if(phase!=="idle")return;setMsgs([{speaker:"Host",content:"Round 1 begins!"}]);setPhase("discussion");};
+  /* -------------- UI ACTIONS -------------- */
+  const startGame=()=>{if(phase!=="idle")return;setMsgs([{speaker:"Host",content:"Round 1 begins!"}]);setPhase("discussion");};
 
+  /* ----------------- UI ------------------- */
   return(
     <main className="max-w-4xl mx-auto p-8">
       <h1 className="text-3xl font-bold mb-4">Social Elimination – AI Edition</h1>
       <button onClick={startGame} disabled={phase!=="idle"} className="px-4 py-2 bg-black text-white rounded">Start Game</button>
-      {phase!=="idle"&&<div className="mt-4 font-semibold">Round {round} | Phase: {phase.toUpperCase()} | Time: {fmt(timeLeft)}<br/>Players: {live.join(", ")}</div>}
+      {phase!=="idle"&&<div className="mt-4 font-semibold">Round {round} | Phase: {phase.toUpperCase()} | Time: {fmt(tLeft)}<br/>Players: {live.join(", ")}</div>}
       <div className="mt-6 h-[60vh] overflow-y-auto space-y-3 border p-4">
         {msgs.map((m,i)=>(<p key={i}><strong>{m.speaker}:</strong> {m.content}</p>))}
       </div>
