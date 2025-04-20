@@ -62,17 +62,25 @@ export default function Home() {
     }catch(e){console.error(e);return "";}
   };
 
-  const aiSpeak = async (speaker:string, curPhase:"discussion"|"voting")=>{
-    const persona=PLAYERS.find(p=>p.name===speaker)?.persona||"";
-    const allowed=live.join(", ");
-    const sys=`You are ${speaker}, ${persona} Current players: ${allowed}. Only mention names in that list.`;
-    const prompt=curPhase==="discussion"
-      ? "Discussion phase: in ≤120 words, argue who should be voted out and why. Reference valid earlier arguments if useful."
-      : `Voting phase: reply in exactly two lines:\nVOTE: <Name from list>\nREASON: <brief>. Choices: ${live.filter(n=>n!==speaker).join(", ")}`;
+  const aiSpeak = async (speaker:string, curPhase:"discussion"|"voting") => {
+    const persona = PLAYERS.find(p => p.name === speaker)?.persona || "";
+    const allowed = live.join(", ");
+    // Prevent self-reference and self-voting
+    const sys = `You are ${speaker}, ${persona} Current players: ${allowed}. Only mention names in that list. Respond without including your own name or referring to yourself.`;
+    // Discussion or Voting prompts
+    const prompt = curPhase === "discussion"
+      ? "Discussion phase: in ≤120 words, argue who should be voted out and why, referencing others' valid points. Do NOT mention yourself."
+      : `Voting phase: reply in exactly two lines:
+VOTE: <Name from list>
+REASON: <brief>. You MAY NOT vote for yourself. Choices: ${live.filter(n => n !== speaker).join(", ")}`;
 
-    const recent=msgs.filter(m=>m.speaker==="Host"||live.includes(m.speaker)).slice(-30);
-    const conversation=[...recent.map(m=>({role:m.speaker===speaker?"assistant":"user",content:m.content})),{role:"user",content:prompt}];
-    const response=await callOpenAI(sys,conversation);
+    const recent = msgs.filter(m => m.speaker === "Host" || live.includes(m.speaker)).slice(-30);
+    const conversation = [
+      ...recent.map(m => ({ role: m.speaker === speaker ? "assistant" : "user", content: m.content })),
+      { role: "user", content: prompt }
+    ];
+
+    const response = await callOpenAI(sys, conversation);
     if (response) setMsgs(prev => [...prev, { speaker, content: response }]);
   };
 
