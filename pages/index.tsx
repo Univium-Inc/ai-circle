@@ -352,7 +352,7 @@ export default function Home() {
     setMessages(prev => [
       ...prev,
       {
-        sender: 'Larry',
+        sender: 'Host',
         recipient: 'Larry',
         content: `Round ${gameState.currentRound} voting has begun! AIs have 2 minutes to vote for who should be eliminated.`,
         timestamp: Date.now(),
@@ -369,7 +369,7 @@ export default function Home() {
       setMessages(prev => [
         ...prev,
         {
-          sender: 'Larry',
+          sender: 'Host',
           recipient: ai as Participant,
           content: `Who do you vote to eliminate from the game and why?`,
           timestamp: Date.now(),

@@ -6,9 +6,12 @@ export type MessageVisibility = 'public' | 'private' | 'highlighted';
 // Define all possible participants
 export type Participant = 'Larry' | 'Benny' | 'Gary' | 'Sophie' | 'Xander' | 'Maya' | 'Ethan';
 
+export type Sender = Participant | 'Host';
+export type Recipient = Participant | 'Host' | 'All';
+
 export type Message = {
-  sender: Participant;
-  recipient: Participant;
+  sender: Sender;
+  recipient: Recipient;
   content: string;
   timestamp?: number;
   visibility: MessageVisibility;
