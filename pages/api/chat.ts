@@ -22,10 +22,10 @@ export default async function handler(
     }
 
     // 2) Log every incoming message
-    console.log('── Incoming /api/chat Request ──');
-    console.log('Total incoming messages:', messages.length);
+    //console.log('── Incoming /api/chat Request ──');
+    //console.log('Total incoming messages:', messages.length);
     messages.forEach((msg: any, i: number) => {
-      console.log(`  [${i}] role=${msg.role}  content="${msg.content}"`);
+      //console.log(`  [${i}] role=${msg.role}  content="${msg.content}"`);
     });
 
     // 3) Figure out which AI this is
@@ -57,8 +57,8 @@ Recipient must be "${userName}" or one of: ${otherAIs.join(', ')}.
     const payloadMessages = [forcedFormat, ...messages].slice(-80);
 
     // 6) Log it so you can inspect
-    console.log('── Payload to OpenAI ──');
-    console.log(JSON.stringify(payloadMessages, null, 2));
+    //console.log('── Payload to OpenAI ──');
+    //console.log(JSON.stringify(payloadMessages, null, 2));
 
     // 7) Call OpenAI
     const completion = await openai.chat.completions.create({
@@ -67,13 +67,13 @@ Recipient must be "${userName}" or one of: ${otherAIs.join(', ')}.
     });
 
     const raw = completion.choices[0]?.message?.content ?? '';
-    console.log('── Raw AI Response ──');
-    console.log(raw);
+    //console.log('── Raw AI Response ──');
+    //console.log(raw);
 
     // 8) Return just the 2‑line text
     return res.status(200).json({ raw });
   } catch (err) {
-    console.error('❌ /api/chat error:', err);
+    //console.error('❌ /api/chat error:', err);
     return res.status(500).json({ error: 'OpenAI request failed' });
   }
 }

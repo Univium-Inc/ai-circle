@@ -20,11 +20,11 @@ export async function getAIResponse({
   if (aiName === 'Benny') {
     console.group(`Benny AI Response Generation`);
     console.log('Input History Length:', history.length);
-    console.log('Message History:', history.map(m => ({
-      sender: m.sender,
-      recipient: m.recipient,
-      content: m.content
-    })));
+    // console.log('Message History:', history.map(m => ({
+    //   sender: m.sender,
+    //   recipient: m.recipient,
+    //   content: m.content
+    // })));
   }
   
   const aiPersonality = getPersonality(aiName);
@@ -84,7 +84,7 @@ export async function getAIResponse({
       role: m.sender === aiName ? 'assistant' : 'user',
       content: `${m.sender} → ${m.recipient}: ${m.content}`,
     };
-    console.log('Formatted History Message:', messageFormat);
+    //console.log('Formatted History Message:', messageFormat);
     return messageFormat;
   });
 
@@ -115,11 +115,11 @@ export async function getAIResponse({
 
     // Parse response
     const { raw } = await res.json();
-    console.log('Raw AI Response:', raw);
+   // console.log('Raw AI Response:', raw);
 
     // Strict parsing with extensive logging
     const lines = raw.split('\n').map((line: string) => line.trim()).filter(Boolean);
-    console.log('Parsed Lines:', lines);
+  //  console.log('Parsed Lines:', lines);
 
     let target = '';
     let content = '';
@@ -130,12 +130,12 @@ export async function getAIResponse({
 
     if (toLine) {
       target = toLine.replace('TO:', '').trim();
-      console.log('Extracted Target:', target);
+  //    console.log('Extracted Target:', target);
     }
     
     if (msgLine) {
       content = msgLine.replace('MESSAGE:', '').trim();
-      console.log('Extracted Content:', content);
+   //   console.log('Extracted Content:', content);
     }
     
     // Validate and correct target
@@ -152,7 +152,7 @@ export async function getAIResponse({
       content = `Thinking about our conversation, ${target}.`;
     }
 
-    console.log('Final Response:', { target, content });
+ //   console.log('Final Response:', { target, content });
     console.groupEnd();
 
     return {

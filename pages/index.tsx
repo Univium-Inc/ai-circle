@@ -109,12 +109,10 @@ export default function Home() {
         .filter(m => m.sender === ai || m.recipient === ai)
         .slice(-20);
 
-      const secretWord = AI_PERSONALITIES.find(p => p.name === ai)
-        ?.secretWord ?? '';
+      console.log(`Processing turn for ${ai}`, history);
 
       const { content, target } = await getAIResponse({
         aiName: ai,
-        secretWord,
         history,
         userName: 'Larry'
       });
