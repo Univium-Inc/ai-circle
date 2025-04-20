@@ -119,6 +119,7 @@ export default function Home() {
   };
   
   // Helper to parse votes from messages
+  // Helper to parse votes from messages
   const parseVoteFromMessage = (message: Message): Vote | null => {
     const content = message.content.toLowerCase();
     if (
@@ -130,6 +131,18 @@ export default function Home() {
       const match = content.match(/eliminate\s+(\w+)|vote for\s+(\w+)/i);
       if (match) {
         const votedForName = (match[1] || match[2]);
+        
+        // Allow votes for Larry
+        if (votedForName.toLowerCase() === 'larry') {
+          return {
+            voter: message.sender as Participant,
+            votedFor: 'Larry',
+            timestamp: message.timestamp || Date.now(),
+            round: gameState.currentRound
+          };
+        }
+        
+        // For other AIs, check against existing names
         const votedFor = aiNames.find(name => 
           name.toLowerCase() === votedForName.toLowerCase()
         );
@@ -170,113 +183,139 @@ export default function Home() {
   
   // Process elimination based on votes
   // Process elimination based on votes
-  const processElimination = useCallback(() => {
-    if (gameState.eliminatedParticipants.length >= aiNames.length - 1) {
-      // Game over, only one AI remains
-      const winner = aiNames.find(ai => 
-        !gameState.eliminatedParticipants.includes(ai as Participant)
-      );
-      
-      // Announce winner
+  // Process elimination based on votes - finding participant with MOST votes
+const processElimination = useCallback(() => {
+  // Count all eligible participants (both AIs and Larry)
+  const allActiveParticipants = [
+    'Larry', 
+    ...aiNames.filter(ai => !gameState.eliminatedParticipants.includes(ai as Participant))
+  ];
+  
+  if (allActiveParticipants.length <= 2) {
+    // Game over, only one AI or Larry remains
+    const winner = allActiveParticipants[0];
+    
+    // Announce winner
+    setMessages(prev => [
+      ...prev,
+      {
+        sender: 'Larry',
+        recipient: 'Larry',
+        content: `The game is over! ${winner} is the last one standing and wins the game!`,
+        timestamp: Date.now(),
+        visibility: 'highlighted'
+      }
+    ]);
+    
+    return;
+  }
+  
+  const voteCounts = countVotes();
+  console.log("Vote counts for elimination:", voteCounts);
+  
+  // Find participant with highest votes, excluding already eliminated
+  let highestVotes = -1;
+  let highestParticipant: Participant | null = null;
+  
+  Object.entries(voteCounts).forEach(([participant, count]) => {
+    if (
+      !gameState.eliminatedParticipants.includes(participant as Participant) && 
+      count > highestVotes
+    ) {
+      highestVotes = count;
+      highestParticipant = participant as Participant;
+    }
+  });
+  
+  if (highestParticipant && highestVotes > 0) {
+    // Special handling if Larry is eliminated
+    if (highestParticipant === 'Larry') {
       setMessages(prev => [
         ...prev,
         {
           sender: 'Larry',
           recipient: 'Larry',
-          content: `The game is over! ${winner} is the last one standing and wins the game!`,
+          content: `You (Larry) have been eliminated from the game with ${highestVotes} votes! Game over - the AIs have won!`,
           timestamp: Date.now(),
           visibility: 'highlighted'
         }
       ]);
       
-      return;
-    }
-    
-    const voteCounts = countVotes();
-    console.log("Vote counts for elimination:", voteCounts);
-    
-    // Find AI with highest votes, excluding already eliminated
-    let highestVotes = -1;
-    let highestAI: Participant | null = null;
-    
-    Object.entries(voteCounts).forEach(([ai, count]) => {
-      const participant = ai as Participant;
-      if (
-        !gameState.eliminatedParticipants.includes(participant) && 
-        count > highestVotes
-      ) {
-        highestVotes = count;
-        highestAI = participant;
-      }
-    });
-    
-    // In case of a tie, you might want to handle this differently
-    // For now, this will just take the first AI with the highest votes
-    
-    if (highestAI && highestVotes > 0) {  // Only eliminate if they received at least 1 vote
-      // Eliminate this AI
+      // Set some game over state if needed
       setGameState(prev => ({
         ...prev,
-        eliminatedParticipants: [...prev.eliminatedParticipants, highestAI as Participant],
         votingPhase: 'idle',
-        currentRound: prev.currentRound + 1,
-        votesInRound: [], // This clears all votes, ensuring they don't carry over
-        nextVotingTime: Date.now() + 120000 // 2 minutes until next voting round
+        eliminatedParticipants: [...prev.eliminatedParticipants, 'Larry'],
       }));
       
-      // Update chat state to mark as eliminated
+      return; // End the game when Larry is eliminated
+    }
+    
+    // Regular elimination for an AI
+    setGameState(prev => ({
+      ...prev,
+      eliminatedParticipants: [...prev.eliminatedParticipants, highestParticipant as Participant],
+      votingPhase: 'idle',
+      currentRound: prev.currentRound + 1,
+      votesInRound: [], // Clear all votes to prevent carrying over
+      nextVotingTime: Date.now() + 120000 // 2 minutes until next voting round
+    }));
+    
+    // Update chat state for eliminated AI
+    if (highestParticipant !== 'Larry') {
       setChatStates(prev => ({
         ...prev,
-        [highestAI]: {
-          ...prev[highestAI],
+        [highestParticipant as string]: {
+          ...prev[highestParticipant as string],
           isEliminated: true
         }
       }));
-      
-      // Announce elimination
-      setMessages(prev => [
-        ...prev,
-        {
-          sender: 'Larry',
-          recipient: 'Larry',
-          content: `${highestAI} has been eliminated from the game in round ${gameState.currentRound} with ${highestVotes} votes!`,
-          timestamp: Date.now(),
-          visibility: 'highlighted'
-        }
-      ]);
-      
-      // Reset voting tokens for next round
-      const resetVotingTokens = aiNames.reduce((acc, ai) => {
-        acc[ai as Participant] = false;
-        return acc;
-      }, {} as Record<Participant, boolean>);
-      
-      setGameState(prev => ({
-        ...prev,
-        votingTokensAvailable: resetVotingTokens
-      }));
-    } else {
-      // No votes or tied with zero votes, skip elimination
-      setGameState(prev => ({
-        ...prev,
-        votingPhase: 'idle',
-        currentRound: prev.currentRound + 1,
-        votesInRound: [], // Clear all votes
-        nextVotingTime: Date.now() + 120000
-      }));
-      
-      setMessages(prev => [
-        ...prev,
-        {
-          sender: 'Larry',
-          recipient: 'Larry',
-          content: `No one received any votes in round ${gameState.currentRound}. No elimination this round!`,
-          timestamp: Date.now(),
-          visibility: 'highlighted'
-        }
-      ]);
     }
-  }, [gameState, aiNames]);
+    
+    // Announce elimination
+    setMessages(prev => [
+      ...prev,
+      {
+        sender: 'Larry',
+        recipient: 'Larry',
+        content: `${highestParticipant} has been eliminated from the game in round ${gameState.currentRound} with ${highestVotes} votes!`,
+        timestamp: Date.now(),
+        visibility: 'highlighted'
+      }
+    ]);
+    
+    // Reset voting tokens for next round
+    const resetVotingTokens = aiNames.reduce((acc, ai) => {
+      acc[ai as Participant] = false;
+      return acc;
+    }, {} as Record<Participant, boolean>);
+    
+    setGameState(prev => ({
+      ...prev,
+      votingTokensAvailable: resetVotingTokens
+    }));
+  } else {
+    // No votes or tied with zero votes, skip elimination
+    setGameState(prev => ({
+      ...prev,
+      votingPhase: 'idle',
+      currentRound: prev.currentRound + 1,
+      votesInRound: [], // Clear all votes
+      nextVotingTime: Date.now() + 120000
+    }));
+    
+    setMessages(prev => [
+      ...prev,
+      {
+        sender: 'Larry',
+        recipient: 'Larry',
+        content: `No one received any votes in round ${gameState.currentRound}. No elimination this round!`,
+        timestamp: Date.now(),
+        visibility: 'highlighted'
+      }
+    ]);
+  }
+}, [gameState, aiNames]);
   
   // Start voting phase
   const startVotingPhase = useCallback(() => {
