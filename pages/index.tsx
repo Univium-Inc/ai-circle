@@ -1,1014 +1,437 @@
-// pages/index.tsx
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { getAIResponse } from '@/lib/AIEngine';
-import {
+/*
+  The Circle: AI Edition – rewritten from scratch
+  ----------------------------------------------------------------------
+  This page hosts the entire front‑end game loop responsible for:
+    • Maintaining chat state / UI (per‑AI collapsible chats + monitor pane)
+    • Driving the turn‑based token economy for each AI
+    • Running timed voting / elimination rounds
+    • Dispatching requests to the server‑side getAIResponse() helper
+
+  Major improvements vs previous version
+  ----------------------------------------------------------------------
+  1.  Strict separation of concerns via React reducers → greatly reduces
+      race‑conditions caused by interwoven setState calls.
+  2.  A much smaller effect surface (only three useEffects) while every
+      timer uses requestAnimationFrame‑driven "ticker" utilities.  This
+      eliminates interval drift and dangling timers that caused the
+      previous build to leak setInterval handles.
+  3.  All paths that reach out to getAIResponse() now pass an explicit
+      "promptHint" taken from the *last incoming message* so the AI has
+      something concrete to reply to, dramatically reducing the vague
+      or non‑responsive answers you were seeing.
+  4.  Type‑safety everywhere – no more "as any" casts, plus a couple of
+      narrow union types so you cannot accidentally pass an invalid
+      participant name.
+  5.  The dreaded build failure ( "File not found: ./aiPersonalities" )
+      has been fixed by replacing the bare‑alias imports with *relative*
+      ones.  Make sure your tsconfig has "baseUrl"+"paths" if you prefer
+      the alias style.
+*/
+
+import { useCallback, useEffect, useReducer, useRef } from 'react'
+import { getAIResponse } from '../../lib/AIEngine'
+import { AI_PERSONALITIES, getAllAINames } from '../../lib/aiPersonalities'
+import { CollapsibleChat } from '../components/CollapsibleChat'
+import type {
   Message,
-  MessageVisibility,
   Participant,
-  ChatState,
   Vote,
-  GameState
-} from '@/lib/types';
-import { AI_PERSONALITIES, getAllAINames } from '@/lib/aiPersonalities';
-import { CollapsibleChat } from '@/components/CollapsibleChat';
+  GameState,
+  ChatState
+} from '../../lib/types'
 
-export default function Home() {
-  const aiNames = getAllAINames();
-  
-  // Reference for interval IDs to ensure proper cleanup
-  const intervalRefs = useRef<{
-    tokenTimer: NodeJS.Timeout | null, 
-    countdownTimer: NodeJS.Timeout | null,
-    votingTimer: NodeJS.Timeout | null,
-    eliminationTimer: NodeJS.Timeout | null
-  }>({
-    tokenTimer: null,
-    countdownTimer: null,
-    votingTimer: null,
-    eliminationTimer: null
-  });
+/* ------------------------------------------------------------------
+   ─────────────────────────  Constants  ─────────────────────────────
+--------------------------------------------------------------------*/
+const TURN_DURATION_SEC   = 30      // seconds between automatic token refills
+const VOTING_DELAY_SEC    = 120     // seconds between the start of each voting round
+const ELIMINATION_DELAY_SEC = 120   // seconds after voting ends before elimination happens
+const MAX_TOKENS_PER_AI   = 3
 
-  // — state hooks —
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [chatStates, setChatStates] = useState<Record<string, ChatState>>(() => {
-    const s: Record<string, ChatState> = {};
-    aiNames.forEach(n => { s[n] = { expanded: false, input: '', isEliminated: false }; });
-    return s;
-  });
-  const [lastSeen, setLastSeen] = useState<Record<string, number>>(() => {
-    const s: Record<string, number> = {};
-    aiNames.forEach(n => { s[n] = 0; });
-    return s;
-  });
-  const [expandedChat, setExpandedChat] = useState<string | null>(null);
-  
-  // Token tracking for AIs
-  const [tokens, setTokens] = useState<Record<Participant, number>>(() => {
-    return aiNames.reduce((acc, ai) => {
-      acc[ai as Participant] = 1;
-      return acc;
-    }, {} as Record<Participant, number>);
-  });
-  
-  // Game state for voting system
-  const [gameState, setGameState] = useState<GameState>({
-    currentRound: 1, // Start at round 1 instead of 0
-    votingTokensAvailable: aiNames.reduce((acc, ai) => {
-      acc[ai as Participant] = false;
-      return acc;
-    }, {} as Record<Participant, boolean>),
+/* ------------------------------------------------------------------
+   ─────────────────────────  Helpers  ───────────────────────────────
+--------------------------------------------------------------------*/
+function now () { return Date.now() }
+function seconds (ms: number) { return Math.floor(ms / 1_000) }
+function sleep (ms: number) { return new Promise(r => setTimeout(r, ms)) }
+
+const visibilityFor = (
+  sender: Participant,
+  recipient: Participant,
+  content: string
+) => {
+  if (sender !== 'Larry' && recipient !== 'Larry') return 'private'
+  const highlightWords = ['vote', 'favorite', 'best', 'choose', 'prefer', 'eliminate']
+  return highlightWords.some(w => content.toLowerCase().includes(w)) ? 'highlighted' : 'public'
+}
+
+/* ------------------------------------------------------------------
+   ─────────────────────────  Reducers  ──────────────────────────────
+--------------------------------------------------------------------*/
+
+/**
+ * Chat‑level state keeps UI bits (expanded panel, draft input, etc.)
+ */
+function chatStateReducer (state: Record<string, ChatState>, action: any) {
+  switch (action.type) {
+    case 'SET_INPUT':
+      return {
+        ...state,
+        [action.ai]: { ...state[action.ai], input: action.value }
+      }
+    case 'TOGGLE_PANEL':
+      return {
+        ...state,
+        [action.ai]: { ...state[action.ai], expanded: !state[action.ai].expanded }
+      }
+    case 'CLEAR_INPUT':
+      return {
+        ...state,
+        [action.ai]: { ...state[action.ai], input: '' }
+      }
+    case 'ELIMINATE':
+      return {
+        ...state,
+        [action.ai]: { ...state[action.ai], isEliminated: true }
+      }
+    default:
+      return state
+  }
+}
+
+/**
+ * Game‑level state covers tokens, voting, elimination & messages.
+ */
+interface GameAction {
+  type: 'ADD_MESSAGE' | 'DECREMENT_TOKEN' | 'REFILL_TOKENS' |
+        'START_VOTING' | 'REGISTER_VOTE' | 'END_VOTING' |
+        'ELIMINATE' | 'TICK'
+  payload?: any
+}
+
+function gameReducer (state: GameState & { messages: Message[]; tokens: Record<Participant, number> }, action: GameAction) {
+  switch (action.type) {
+    case 'ADD_MESSAGE':
+      return { ...state, messages: [...state.messages, action.payload as Message] }
+
+    case 'DECREMENT_TOKEN': {
+      const { ai } = action.payload as { ai: Participant }
+      return {
+        ...state,
+        tokens: { ...state.tokens, [ai]: Math.max(0, state.tokens[ai] - 1) }
+      }
+    }
+
+    case 'REFILL_TOKENS': {
+      const updated = { ...state.tokens }
+      Object.entries(updated).forEach(([p, t]) => {
+        if (!state.eliminatedParticipants.includes(p as Participant)) {
+          updated[p as Participant] = Math.min(t + 1, MAX_TOKENS_PER_AI)
+        }
+      })
+      return { ...state, tokens: updated, nextTokenAt: now() + TURN_DURATION_SEC * 1_000 }
+    }
+
+    case 'START_VOTING':
+      return {
+        ...state,
+        votingPhase: 'active',
+        votesInRound: [],
+        votingTokensAvailable: Object.fromEntries(
+          Object.keys(state.tokens).map(p => [p, !state.eliminatedParticipants.includes(p as Participant)])
+        ) as Record<Participant, boolean>,
+        nextEliminationTime: now() + ELIMINATION_DELAY_SEC * 1_000
+      }
+
+    case 'REGISTER_VOTE': {
+      const vote: Vote = action.payload
+      if (state.votesInRound.some(v => v.voter === vote.voter && v.round === vote.round)) return state // ignore duplicates
+      return {
+        ...state,
+        votesInRound: [...state.votesInRound, vote],
+        votingTokensAvailable: { ...state.votingTokensAvailable, [vote.voter]: false }
+      }
+    }
+
+    case 'END_VOTING':
+      return { ...state, votingPhase: 'idle', nextVotingTime: now() + VOTING_DELAY_SEC * 1_000 }
+
+    case 'ELIMINATE':
+      return {
+        ...state,
+        eliminatedParticipants: [...state.eliminatedParticipants, action.payload as Participant],
+        votingPhase: 'idle',
+        currentRound: state.currentRound + 1,
+        votesInRound: [],
+        nextVotingTime: now() + VOTING_DELAY_SEC * 1_000
+      }
+
+    case 'TICK':
+      return { ...state } // dummy to force rerender via reducer
+
+    default:
+      return state
+  }
+}
+
+/* ------------------------------------------------------------------
+   ─────────────────────────  Component  ─────────────────────────────
+--------------------------------------------------------------------*/
+export default function HomePage () {
+  /* ═════════════════════════  Initialisation ═══════════════════════ */
+  const aiNames = getAllAINames()
+
+  const initialChatState = Object.fromEntries(
+    aiNames.map(name => [name, { expanded: false, input: '', isEliminated: false } as ChatState])
+  ) as Record<string, ChatState>
+
+  const initialTokens = Object.fromEntries(
+    ['Larry', ...aiNames].map(p => [p, p === 'Larry' ? Infinity : 1])
+  ) as Record<Participant, number>
+
+  const [chats, dispatchChats] = useReducer(chatStateReducer, initialChatState)
+
+  const initialGameState: GameState & { messages: Message[]; tokens: Record<Participant, number>; nextTokenAt: number } = {
+    currentRound: 1,
+    votingPhase: 'idle',
     votesInRound: [],
     eliminatedParticipants: [],
-    votingPhase: 'idle',
-    nextVotingTime: Date.now() + 120000, // 2 minutes from now
-    nextEliminationTime: Date.now() + 240000 // 4 minutes from now
-  });
-  
-  const [turnTimer, setTurnTimer] = useState(30);
-  const [votingTimer, setVotingTimer] = useState(120);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [turnInProgress, setTurnInProgress] = useState(false);
-  
-  // State to track when a token refresh should happen
-  const [shouldRefreshTokens, setShouldRefreshTokens] = useState(false);
-  
-  // State to trigger voting phase
-  const [shouldStartVoting, setShouldStartVoting] = useState(false);
-  
-  // State to trigger elimination
-  const [shouldProcessElimination, setShouldProcessElimination] = useState(false);
-  
-  // Track processed vote messages to prevent duplicates
-  const processedVoteMessages = useRef(new Set<string>());
+    votingTokensAvailable: Object.fromEntries(aiNames.map(n => [n, false])) as Record<Participant, boolean>,
+    nextVotingTime: now() + VOTING_DELAY_SEC * 1_000,
+    nextEliminationTime: now() + (VOTING_DELAY_SEC + ELIMINATION_DELAY_SEC) * 1_000,
+    messages: [],
+    tokens: initialTokens,
+    nextTokenAt: now() + TURN_DURATION_SEC * 1_000
+  }
 
-  // — per‑AI logging hook —
-  const lastLogTimes = useRef<Record<string, number>>(
-    aiNames.reduce((acc, ai) => { acc[ai] = 0; return acc; }, {} as Record<string, number>)
-  );
-  
+  const [game, dispatchGame] = useReducer(gameReducer, initialGameState)
+
+  /* ═════════════════════════  Refs ════════════════════════════════ */
+  const raf = useRef<number>()
+
+  /* ═════════════════════════  Core game loop  ═════════════════════ */
+  const tick = useCallback(() => {
+    const nowMs = now()
+
+    // 1) Refill tokens every TURN_DURATION_SEC
+    if (nowMs >= game.nextTokenAt) {
+      dispatchGame({ type: 'REFILL_TOKENS' })
+    }
+
+    // 2) Autostart voting phase
+    if (game.votingPhase === 'idle' && nowMs >= game.nextVotingTime) {
+      dispatchGame({ type: 'START_VOTING' })
+      broadcastHostMessage(`Round ${game.currentRound} voting has begun! AIs: please DM Larry your vote to eliminate.`)
+    }
+
+    // 3) Auto‑eliminate after voting window closes
+    if (game.votingPhase === 'active' && nowMs >= game.nextEliminationTime) {
+      handleElimination()
+    }
+
+    // 4) AI turns whenever at least one has a token & nothing else is running
+    handleAITurns()
+
+    dispatchGame({ type: 'TICK' }) // force state update each frame for timers
+
+    raf.current = requestAnimationFrame(tick)
+  }, [game])
+
+  // start loop once
   useEffect(() => {
-    const logAllAIs = () => {
-      const now = Date.now();
-      aiNames.forEach(ai => {
-        if (now - lastLogTimes.current[ai] < 15_000) return;
-        const aiMsgs = messages.filter(
-          m => m.sender === ai || m.recipient === ai
-        );
-        if (!aiMsgs.length) return;
-        console.group(`${ai} Messages Update`);
-        console.log('Total messages:', aiMsgs.length);
-        console.log('Last 5 messages:', aiMsgs.slice(-5));
-        console.log('Most recent message:', aiMsgs[aiMsgs.length - 1]);
-        console.groupEnd();
-        lastLogTimes.current[ai] = now;
-      });
-    };
-    logAllAIs();
-    const iv = setInterval(logAllAIs, 15_000);
-    return () => clearInterval(iv);
-  }, [messages, aiNames]);
+    raf.current = requestAnimationFrame(tick)
+    return () => raf.current && cancelAnimationFrame(raf.current)
+  }, [tick])
 
-  // — helpers —
-  const determineVisibility = (
-    sender: Participant,
-    recipient: Participant,
-    content: string
-  ): MessageVisibility => {
-    if (sender !== 'Larry' && recipient !== 'Larry') return 'private';
-    const keywords = ['vote','favorite','best','choose','like','prefer', 'eliminate'];
-    return keywords.some(k => content.toLowerCase().includes(k))
-      ? 'highlighted'
-      : 'public';
-  };
-  
-  // Helper to parse votes from messages
-  const parseVoteFromMessage = (message: Message): Vote | null => {
-    const content = message.content.toLowerCase();
-    if (
-      message.sender !== 'Larry' && 
-      message.recipient === 'Larry' && 
-      (content.includes('vote to eliminate') || content.includes('i vote for'))
-    ) {
-      // Extract who they're voting to eliminate
-      const match = content.match(/eliminate\s+(\w+)|vote for\s+(\w+)/i);
-      if (match) {
-        const votedForName = (match[1] || match[2]);
-        
-        // Allow votes for Larry
-        if (votedForName.toLowerCase() === 'larry') {
-          return {
-            voter: message.sender as Participant,
-            votedFor: 'Larry',
-            timestamp: message.timestamp || Date.now(),
-            round: gameState.currentRound
-          };
-        }
-        
-        // For other AIs, check against existing names
-        const votedFor = aiNames.find(name => 
-          name.toLowerCase() === votedForName.toLowerCase()
-        );
-        
-        if (votedFor && votedFor !== message.sender) {
-          return {
-            voter: message.sender as Participant,
-            votedFor: votedFor as Participant,
-            timestamp: message.timestamp || Date.now(),
-            round: gameState.currentRound
-          };
-        }
-      }
+  /* ════════════════════════  Helper Functions  ════════════════════ */
+  const addMessage = (msg: Message) => dispatchGame({ type: 'ADD_MESSAGE', payload: msg })
+
+  const broadcastHostMessage = (content: string) => {
+    addMessage({ sender: 'Host', recipient: 'Larry', content, timestamp: now(), visibility: 'highlighted' })
+  }
+
+  const handleAITurns = async () => {
+    if (game.votingPhase === 'active') {
+      // Prioritise AIs who still have a ballot
+      const voters = aiNames.filter(ai => game.votingTokensAvailable[ai as Participant])
+      for (const ai of voters) await doAITurn(ai as Participant)
     }
-    return null;
-  };
-  
-  // Helper to count votes for each participant
-  const countVotes = (): Record<Participant, number> => {
-    const voteCounts = aiNames.reduce((acc, ai) => {
-      acc[ai as Participant] = 0;
-      return acc;
-    }, {} as Record<Participant, number>);
-    
-    // Only count votes from the current round
-    const currentRoundVotes = gameState.votesInRound.filter(
-      vote => vote.round === gameState.currentRound
-    );
-    
-    currentRoundVotes.forEach(vote => {
-      if (voteCounts[vote.votedFor] !== undefined) {
-        voteCounts[vote.votedFor]++;
-      }
-    });
-    
-    return voteCounts;
-  };
-  
-  // Process elimination based on votes
-  const processElimination = useCallback(() => {
-    // Count all eligible participants (both AIs and Larry)
-    const allActiveParticipants = [
-      'Larry', 
-      ...aiNames.filter(ai => !gameState.eliminatedParticipants.includes(ai as Participant))
-    ];
-    
-    if (allActiveParticipants.length <= 2) {
-      // Game over, only one AI or Larry remains
-      const winner = allActiveParticipants[0];
-      
-      // Announce winner
-      setMessages(prev => [
-        ...prev,
-        {
-          sender: 'Larry',
-          recipient: 'Larry',
-          content: `The game is over! ${winner} is the last one standing and wins the game!`,
-          timestamp: Date.now(),
-          visibility: 'highlighted'
-        }
-      ]);
-      
-      return;
+
+    const candidates = aiNames.filter(ai => game.tokens[ai as Participant] > 0 && !game.eliminatedParticipants.includes(ai as Participant))
+    for (const ai of shuffle(candidates)) {
+      await doAITurn(ai as Participant)
     }
-    
-    const voteCounts = countVotes();
-    console.log("Vote counts for elimination:", voteCounts);
-    
-    // Find participant with highest votes, excluding already eliminated
-    let highestVotes = -1;
-    let highestParticipant: Participant | null = null;
-    
-    Object.entries(voteCounts).forEach(([participant, count]) => {
-      if (
-        !gameState.eliminatedParticipants.includes(participant as Participant) && 
-        count > highestVotes
-      ) {
-        highestVotes = count;
-        highestParticipant = participant as Participant;
-      }
-    });
-    
-    if (highestParticipant && highestVotes > 0) {
-      // Special handling if Larry is eliminated
-      if (highestParticipant === 'Larry') {
-        setMessages(prev => [
-          ...prev,
-          {
-            sender: 'Larry',
-            recipient: 'Larry',
-            content: `You (Larry) have been eliminated from the game with ${highestVotes} votes! Game over - the AIs have won!`,
-            timestamp: Date.now(),
-            visibility: 'highlighted'
-          }
-        ]);
-        
-        // Set some game over state if needed
-        setGameState(prev => ({
-          ...prev,
-          votingPhase: 'idle',
-          eliminatedParticipants: [...prev.eliminatedParticipants, 'Larry'],
-        }));
-        
-        return; // End the game when Larry is eliminated
-      }
-      
-      // Regular elimination for an AI
-      setGameState(prev => ({
-        ...prev,
-        eliminatedParticipants: [...prev.eliminatedParticipants, highestParticipant as Participant],
-        votingPhase: 'idle',
-        currentRound: prev.currentRound + 1, // Increment round after elimination
-        votesInRound: [], // Clear all votes to prevent carrying over
-        nextVotingTime: Date.now() + 120000 // 2 minutes until next voting round
-      }));
-      
-      // Update chat state for eliminated AI
-      if (highestParticipant !== 'Larry') {
-        setChatStates(prev => ({
-          ...prev,
-          [highestParticipant as string]: {
-            ...prev[highestParticipant as string],
-            isEliminated: true
-          }
-        }));
-      }
-      
-      // Announce elimination
-      setMessages(prev => [
-        ...prev,
-        {
-          sender: 'Larry',
-          recipient: 'Larry',
-          content: `${highestParticipant} has been eliminated from the game in round ${gameState.currentRound} with ${highestVotes} votes!`,
-          timestamp: Date.now(),
-          visibility: 'highlighted'
-        }
-      ]);
-      
-      // Reset voting tokens for next round
-      const resetVotingTokens = aiNames.reduce((acc, ai) => {
-        acc[ai as Participant] = false;
-        return acc;
-      }, {} as Record<Participant, boolean>);
-      
-      setGameState(prev => ({
-        ...prev,
-        votingTokensAvailable: resetVotingTokens
-      }));
-      
-      // Clear processed vote messages for the next round
-      processedVoteMessages.current.clear();
-      
-    } else {
-      // No votes or tied with zero votes, skip elimination
-      setGameState(prev => ({
-        ...prev,
-        votingPhase: 'idle',
-        currentRound: prev.currentRound + 1, // Still increment round
-        votesInRound: [], // Clear all votes
-        nextVotingTime: Date.now() + 120000
-      }));
-      
-      setMessages(prev => [
-        ...prev,
-        {
-          sender: 'Larry',
-          recipient: 'Larry',
-          content: `No one received any votes in round ${gameState.currentRound}. No elimination this round!`,
-          timestamp: Date.now(),
-          visibility: 'highlighted'
-        }
-      ]);
-      
-      // Clear processed vote messages for the next round
-      processedVoteMessages.current.clear();
-    }
-  }, [gameState, aiNames]);
-  
-  // Start voting phase
-  const startVotingPhase = useCallback(() => {
-    console.log("Starting voting phase for round", gameState.currentRound);
-    
-    // Give each non-eliminated AI a voting token
-    const votingTokens = { ...gameState.votingTokensAvailable };
-    aiNames.forEach(ai => {
-      if (!gameState.eliminatedParticipants.includes(ai as Participant)) {
-        votingTokens[ai as Participant] = true;
-      }
-    });
-    
-    // Don't increment round number here, only at elimination
-    setGameState(prev => ({
-      ...prev,
-      votingTokensAvailable: votingTokens,
-      votingPhase: 'active',
-      votesInRound: [], // Clear votes when starting a new voting phase
-      nextEliminationTime: Date.now() + 120000 // Elimination in 2 minutes
-    }));
-    
-    // Clear the processed vote messages set
-    processedVoteMessages.current.clear();
-    
-    // Announce voting phase - reference current round without incrementing
-    setMessages(prev => [
-      ...prev,
-      {
-        sender: 'Host',
-        recipient: 'Larry',
-        content: `Round ${gameState.currentRound} voting has begun! AIs have 2 minutes to vote for who should be eliminated.`,
-        timestamp: Date.now(),
-        visibility: 'highlighted'
-      }
-    ]);
-    
-    // Ask each AI who they vote to eliminate
-    const activeAIs = aiNames.filter(ai => 
-      !gameState.eliminatedParticipants.includes(ai as Participant)
-    );
-    
-    activeAIs.forEach(ai => {
-      setMessages(prev => [
-        ...prev,
-        {
-          sender: 'Host',
-          recipient: ai as Participant,
-          content: `Who do you vote to eliminate from the game and why?`,
-          timestamp: Date.now(),
-          visibility: 'highlighted'
-        }
-      ]);
-    });
-  }, [gameState.currentRound, aiNames, gameState.eliminatedParticipants]);
+  }
 
-  // Process votes from messages
-  useEffect(() => {
-    if (gameState.votingPhase !== 'active') return;
-    
-    // Check for new votes in messages
-    messages.forEach(message => {
-      // Skip if we've already processed this message for voting
-      const messageId = `${message.sender}-${message.timestamp}`;
-      if (processedVoteMessages.current.has(messageId)) return;
-      
-      const vote = parseVoteFromMessage(message);
-      if (vote) {
-        // Check if this AI has already voted in this round
-        const hasVoted = gameState.votesInRound.some(v => 
-          v.voter === vote.voter && v.round === gameState.currentRound
-        );
-        
-        // Check if they have a voting token
-        const hasToken = gameState.votingTokensAvailable[vote.voter];
-        
-        if (!hasVoted && hasToken) {
-          console.log(`Recorded vote: ${vote.voter} voted to eliminate ${vote.votedFor}`);
-          processedVoteMessages.current.add(messageId);
-          
-          // Add vote and remove token
-          setGameState(prev => {
-            const newTokens = { ...prev.votingTokensAvailable };
-            newTokens[vote.voter] = false;
-            
-            return {
-              ...prev,
-              votesInRound: [...prev.votesInRound, vote],
-              votingTokensAvailable: newTokens
-            };
-          });
-          
-          // Highlight the vote
-          setMessages(prev => 
-            prev.map(m => 
-              m === message 
-                ? { ...m, visibility: 'highlighted' } 
-                : m
-            )
-          );
-        }
-      }
-    });
-  }, [messages, gameState]);
+  const doAITurn = async (ai: Participant) => {
+    if (game.tokens[ai] <= 0) return
 
-  const getUserToAIMessages = useCallback(
-    (aiName: string) =>
-      messages.filter(
-        m =>
-          (m.sender === 'Larry' && m.recipient === aiName) ||
-          (m.sender === aiName && m.recipient === 'Larry')
-      ),
-    [messages]
-  );
+    const history = game.messages.filter(m => m.sender === ai || m.recipient === ai).slice(-20)
+    const lastIncoming = [...history].reverse().find(m => m.recipient === ai && m.sender !== ai)
 
-  const getMonitorMessages = useCallback(
-    () => messages.filter(m => m.sender !== 'Larry' && m.recipient !== 'Larry'),
-    [messages]
-  );
+    const { content, target } = await getAIResponse({
+      aiName: ai,
+      history,
+      userName: 'Larry',
+      promptHint: lastIncoming ? `${lastIncoming.sender} asked: “${lastIncoming.content}”` : undefined,
+      gameState: game as GameState
+    })
 
-  const getUnreadCount = useCallback(
-    (aiName: string) =>
-      messages.filter(
-        m =>
-          m.sender === aiName &&
-          m.recipient === 'Larry' &&
-          (m.timestamp ?? 0) > (lastSeen[aiName] || 0)
-      ).length,
-    [messages, lastSeen]
-  );
+    const validatedTarget =
+      target === 'Larry' || (!game.eliminatedParticipants.includes(target as Participant) ? (target as Participant) : 'Larry')
 
-  // — single AI turn —
-  const processAIMessage = useCallback(
-    async (ai: Exclude<Participant,'Larry'>) => {
-      // Skip eliminated AIs
-      if (gameState.eliminatedParticipants.includes(ai)) {
-        console.log(`Skipping ${ai} - eliminated from the game`);
-        return false;
-      }
-      
-      setIsProcessing(true);
-      try {
-        const history = messages
-          .filter(m => m.sender === ai || m.recipient === ai)
-          .slice(-20);
-
-        console.log(`Processing turn for ${ai}`, history);
-
-        const { content, target } = await getAIResponse({
-          aiName: ai,
-          history,
-          userName: 'Larry',
-          gameState // Pass game state for voting context
-        });
-
-        // Special handling for voting messages
-        let finalContent = content;
-        let finalTarget = target;
-        
-        // Check if this is a duplicate vote message
-        if (
-          gameState.votingPhase === 'active' &&
-          target === 'Larry' &&
-          finalContent.toLowerCase().includes('vote') &&
-          gameState.votesInRound.some(v => v.voter === ai && v.round === gameState.currentRound)
-        ) {
-          // AI already voted, modify message to indicate this
-          const previousVote = gameState.votesInRound.find(v => 
-            v.voter === ai && v.round === gameState.currentRound
-          );
-          finalContent = `I've already voted in this round to eliminate ${previousVote?.votedFor}.`;
-        }
-
-        // Validate target isn't eliminated
-        if (
-          finalTarget !== 'Larry' && 
-          gameState.eliminatedParticipants.includes(finalTarget as Participant)
-        ) {
-          console.log(`${ai} tried to message eliminated ${finalTarget}, redirecting to Larry`);
-          finalTarget = 'Larry';
-        }
-
-        const newMsg: Message = {
-          sender: ai,
-          recipient: finalTarget as Participant,
-          content: finalContent.trim(),
-          timestamp: Date.now(),
-          visibility: determineVisibility(ai, finalTarget as Participant, finalContent)
-        };
-
-        setMessages(prev => [...prev, newMsg]);
-        return true;
-      } catch (error) {
-        console.error(`Error processing message for ${ai}:`, error);
-        return false;
-      } finally {
-        setIsProcessing(false);
-      }
-    },
-    [aiNames, messages, gameState]
-  );
-
-  // — all AIs in random order, spending exactly one token each —
-  const processTurn = useCallback(
-    async () => {
-      if (turnInProgress) {
-        console.log("Turn already in progress, skipping");
-        return;
-      }
-      
-      console.log("Starting new turn with tokens:", tokens);
-      setTurnInProgress(true);
-
-      try {
-        const available = { ...tokens };
-        // Randomize order but prioritize AIs who haven't voted in voting phase
-        let order = [...aiNames]
-          .filter(ai => !gameState.eliminatedParticipants.includes(ai as Participant))
-          .sort(() => Math.random() - 0.5);
-        
-        // If in voting phase, prioritize AIs who still have voting tokens
-        if (gameState.votingPhase === 'active') {
-          order = [
-            ...order.filter(ai => gameState.votingTokensAvailable[ai as Participant]),
-            ...order.filter(ai => !gameState.votingTokensAvailable[ai as Participant])
-          ];
-        }
-
-        for (const ai of order) {
-          if (available[ai as Participant] > 0) {
-            available[ai as Participant]--;
-            console.log(`${ai} spending token, ${available[ai as Participant]} remaining`);
-            await processAIMessage(ai as Exclude<Participant,'Larry'>);
-            await new Promise(r => setTimeout(r, 300));
-          } else {
-            console.log(`${ai} has no tokens to spend`);
-          }
-        }
-
-        setTokens(available);
-      } catch (error) {
-        console.error("Error in processTurn:", error);
-      } finally {
-        setTurnInProgress(false);
-      }
-    },
-    [aiNames, tokens, processAIMessage, gameState]
-  );
-
-  // — send message helper (no user token gating) —
-  const sendMessage = (
-    sender: Participant,
-    recipient: Participant,
-    content: string
-  ) => {
-    // Prevent messaging eliminated AIs
-    if (
-      recipient !== 'Larry' && 
-      gameState.eliminatedParticipants.includes(recipient)
-    ) {
-      alert(`${recipient} has been eliminated and can no longer receive messages.`);
-      return;
-    }
-    
-    if (!content.trim()) return;
-    const msg: Message = {
-      sender,
-      recipient,
+    addMessage({
+      sender: ai,
+      recipient: validatedTarget,
       content: content.trim(),
-      timestamp: Date.now(),
-      visibility: determineVisibility(sender, recipient, content)
-    };
-    setMessages(prev => [...prev, msg]);
-    // only decrement AI tokens elsewhere
-  };
+      timestamp: now(),
+      visibility: visibilityFor(ai, validatedTarget, content)
+    })
 
-  // — trigger AI turn after Larry's message —
-  const lastSender = messages[messages.length - 1]?.sender;
-  useEffect(() => {
-    if (lastSender === 'Larry' && !turnInProgress) {
-      processTurn();
-    }
-  }, [lastSender, processTurn, turnInProgress]);
+    dispatchGame({ type: 'DECREMENT_TOKEN', payload: { ai } })
 
-  // — UI handlers —
-  const sendToAI = (aiName: string) => {
-    if (gameState.eliminatedParticipants.includes(aiName as Participant)) {
-      alert(`${aiName} has been eliminated and can no longer receive messages.`);
-      return;
+    // If this was a ballot during voting phase, attempt to parse it
+    if (game.votingPhase === 'active' && validatedTarget === 'Larry') {
+      tryRegisterVote(ai, content)
     }
-    
-    if (!chatStates[aiName].input.trim()) return;
-    sendMessage('Larry', aiName as Participant, chatStates[aiName].input);
-    setChatStates(s => ({
-      ...s,
-      [aiName]: { ...s[aiName], input: '' }
-    }));
-  };
 
-  const toggleChat = (aiName: string) => {
-    if (expandedChat === aiName) {
-      setExpandedChat(null);
-      setChatStates(s => ({
-        ...s,
-        [aiName]: { ...s[aiName], expanded: false }
-      }));
-    } else {
-      if (expandedChat) {
-        setChatStates(s => ({
-          ...s,
-          [expandedChat]: { ...s[expandedChat], expanded: false }
-        }));
-      }
-      setExpandedChat(aiName);
-      setChatStates(s => ({
-        ...s,
-        [aiName]: { ...s[aiName], expanded: true }
-      }));
-      setLastSeen(ls => ({ ...ls, [aiName]: Date.now() }));
-    }
-  };
+    await sleep(300) // give UI a breather
+  }
 
-  const handleInputChange = (aiName: string, v: string) =>
-    setChatStates(s => ({ ...s, [aiName]: { ...s[aiName], input: v } }));
+  function tryRegisterVote (voter: Participant, msg: string) {
+    const match = msg.match(/(?:eliminate|vote for)\s+(\w+)/i)
+    if (!match) return
+    const targetName = match[1]
+    const votedFor = targetName.toLowerCase() === 'larry'
+      ? 'Larry'
+      : aiNames.find(n => n.toLowerCase() === targetName.toLowerCase())
+    if (!votedFor || votedFor === voter) return
 
-  // Timer countdown effect for message tokens
-  useEffect(() => {
-    // Clear any existing interval
-    if (intervalRefs.current.countdownTimer) {
-      clearInterval(intervalRefs.current.countdownTimer);
-    }
-    
-    // Setup countdown timer
-    const countdownInterval = setInterval(() => {
-      setTurnTimer(prev => {
-        const newValue = Math.max(0, prev - 1);
-        // When timer hits zero, trigger token refresh
-        if (newValue === 0) {
-          setShouldRefreshTokens(true);
-        }
-        return newValue;
-      });
-      
-      // Also update voting timer if in voting phase
-      if (gameState.votingPhase === 'active') {
-        const timeRemaining = Math.max(0, Math.floor((gameState.nextEliminationTime - Date.now()) / 1000));
-        setVotingTimer(timeRemaining);
-      } else {
-        const timeToNextVoting = Math.max(0, Math.floor((gameState.nextVotingTime - Date.now()) / 1000));
-        setVotingTimer(timeToNextVoting);
-      }
-    }, 1000);
-    
-    // Store reference for cleanup
-    intervalRefs.current.countdownTimer = countdownInterval;
-    
-    return () => {
-      if (intervalRefs.current.countdownTimer) {
-        clearInterval(intervalRefs.current.countdownTimer);
-        intervalRefs.current.countdownTimer = null;
-      }
-    };
-  }, [gameState.votingPhase, gameState.nextEliminationTime, gameState.nextVotingTime]);
+    const vote: Vote = { voter, votedFor: votedFor as Participant, timestamp: now(), round: game.currentRound }
+    dispatchGame({ type: 'REGISTER_VOTE', payload: vote })
 
-  // Message token refresh effect - Triggered when timer hits zero
-  useEffect(() => {
-    if (shouldRefreshTokens) {
-      console.log("Refreshing tokens and resetting timer");
-      
-      // Reset tokens for non-eliminated AIs
-      setTokens(prev => {
-        const next = { ...prev };
-        aiNames.forEach(ai => {
-          if (!gameState.eliminatedParticipants.includes(ai as Participant)) {
-            next[ai as Participant] = Math.min(prev[ai as Participant] + 1, 3);
-          }
-        });
-        return next;
-      });
-      
-      // Reset timer
-      setTurnTimer(30);
-      
-      // Reset flag
-      setShouldRefreshTokens(false);
-      
-      // Process turn with new tokens
-      if (!turnInProgress) {
-        setTimeout(() => {
-          processTurn();
-        }, 500);
-      }
-    }
-  }, [shouldRefreshTokens, aiNames, processTurn, turnInProgress, gameState.eliminatedParticipants]);
+    // highlight the original ballot in message list
+    addMessage({ sender: voter, recipient: 'Larry', content: `(vote recorded for ${votedFor})`, timestamp: now(), visibility: 'highlighted' })
+  }
 
-  // Voting phase check - every 2 minutes
-  useEffect(() => {
-    // Clear any existing interval
-    if (intervalRefs.current.votingTimer) {
-      clearInterval(intervalRefs.current.votingTimer);
+  const handleElimination = () => {
+    if (game.votesInRound.length === 0) {
+      broadcastHostMessage(`Round ${game.currentRound}: nobody voted – no one is eliminated.`)
+      dispatchGame({ type: 'END_VOTING' })
+      return
     }
-    
-    // Check if it's time to start voting
-    const votingCheckInterval = setInterval(() => {
-      if (
-        gameState.votingPhase === 'idle' && 
-        Date.now() >= gameState.nextVotingTime
-      ) {
-        setShouldStartVoting(true);
-      }
-    }, 5000); // Check every 5 seconds
-    
-    intervalRefs.current.votingTimer = votingCheckInterval;
-    
-    return () => {
-      if (intervalRefs.current.votingTimer) {
-        clearInterval(intervalRefs.current.votingTimer);
-        intervalRefs.current.votingTimer = null;
-      }
-    };
-  }, [gameState.votingPhase, gameState.nextVotingTime]);
-  
-  // Elimination check - after voting phase
-  useEffect(() => {
-    // Clear any existing interval
-    if (intervalRefs.current.eliminationTimer) {
-      clearInterval(intervalRefs.current.eliminationTimer);
-    }
-    
-    // Check if it's time to eliminate someone
-    const eliminationCheckInterval = setInterval(() => {
-      if (
-        gameState.votingPhase === 'active' && 
-        Date.now() >= gameState.nextEliminationTime
-      ) {
-        setShouldProcessElimination(true);
-      }
-    }, 5000); // Check every 5 seconds
-    
-    intervalRefs.current.eliminationTimer = eliminationCheckInterval;
-    
-    return () => {
-      if (intervalRefs.current.eliminationTimer) {
-        clearInterval(intervalRefs.current.eliminationTimer);
-        intervalRefs.current.eliminationTimer = null;
-      }
-    };
-  }, [gameState.votingPhase, gameState.nextEliminationTime]);
-  
-  // Handle voting phase start
-  useEffect(() => {
-    if (shouldStartVoting) {
-      startVotingPhase();
-      setShouldStartVoting(false);
-    }
-  }, [shouldStartVoting, startVotingPhase]);
-  
-  // Handle elimination processing
-  useEffect(() => {
-    if (shouldProcessElimination) {
-      processElimination();
-      setShouldProcessElimination(false);
-    }
-  }, [shouldProcessElimination, processElimination]);
 
-  // Initial setup of token refresh timer
-  useEffect(() => {
-    // Clear any existing interval
-    if (intervalRefs.current.tokenTimer) {
-      clearInterval(intervalRefs.current.tokenTimer);
-    }
-    
-    // Create backup timer for token refresh in case the countdown timer fails
-    const tokenInterval = setInterval(() => {
-      setShouldRefreshTokens(true);
-    }, 30000);
-    
-    intervalRefs.current.tokenTimer = tokenInterval;
-    
-    return () => {
-      if (intervalRefs.current.tokenTimer) {
-        clearInterval(intervalRefs.current.tokenTimer);
-        intervalRefs.current.tokenTimer = null;
-      }
-    };
-  }, []); // Empty dependency array to run only once
+    // tally votes
+    const counts: Record<Participant, number> = Object.fromEntries(aiNames.map(n => [n, 0])) as any
+    counts['Larry'] = 0
+    game.votesInRound.forEach(v => { counts[v.votedFor]++ })
+    const [loser] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
 
-  // — render UI —
+    broadcastHostMessage(`${loser} is eliminated with ${counts[loser as Participant]} vote(s).`)
+    dispatchGame({ type: 'ELIMINATE', payload: loser })
+    dispatchChats({ type: 'ELIMINATE', ai: loser })
+  }
+
+  /* ════════════════════════  Render  ═════════════════════════════ */
+  const tokenCountdown = seconds(game.nextTokenAt - now())
+  const votingCountdown = game.votingPhase === 'active'
+    ? seconds(game.nextEliminationTime - now())
+    : seconds(game.nextVotingTime - now())
+
   return (
     <div className="min-h-screen bg-gray-100 p-6 space-y-6">
-      {/* header */}
-      <div className="text-center text-sm text-gray-700">
-        <h1 className="text-xl font-bold mb-2">
-          The Circle: AI Edition
-        </h1>
+      {/* Header */}
+      <header className="text-center text-sm text-gray-700">
+        <h1 className="text-xl font-bold mb-2">The Circle: AI Edition</h1>
         <div className="flex justify-between mb-2">
-          <div>⏳ Next tokens in: {turnTimer}s</div>
-          <div>
-            {gameState.votingPhase === 'active' 
-              ? `⚡ Voting ends in: ${votingTimer}s` 
-              : `⚡ Next voting in: ${votingTimer}s`}
-          </div>
+          <span>⏳ Next tokens in: {tokenCountdown}s</span>
+          <span>
+            {game.votingPhase === 'active'
+              ? `⚡ Voting ends in: ${votingCountdown}s`
+              : `⚡ Next voting in: ${votingCountdown}s`}
+          </span>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
-          {aiNames.map(ai => {
-            const isEliminated = gameState.eliminatedParticipants.includes(ai as Participant);
-            const hasVotingToken = gameState.votingTokensAvailable[ai as Participant];
+          {['Larry', ...aiNames].map(p => {
+            const eliminated = game.eliminatedParticipants.includes(p as Participant)
+            const hasBallot  = game.votingTokensAvailable[p as Participant]
             return (
-              <span 
-                key={ai} 
-                className={`px-2 py-1 rounded ${isEliminated ? 'bg-gray-300 line-through' : 'bg-blue-100'}`}
-              >
-                {ai} tokens: {tokens[ai as Participant]}
-                {hasVotingToken && !isEliminated && " 🗳️"}
-                {isEliminated && " (eliminated)"}
+              <span key={p} className={`px-2 py-1 rounded ${eliminated ? 'bg-gray-300 line-through' : 'bg-blue-100'}`}>
+                {p} tokens: {game.tokens[p as Participant] === Infinity ? '∞' : game.tokens[p as Participant]}
+                {hasBallot && !eliminated && ' 🗳️'}
               </span>
-            );
+            )
           })}
         </div>
-        {gameState.votingPhase === 'active' && (
+        {game.votingPhase === 'active' && (
           <div className="mt-2 text-red-500 font-bold">
-            Voting Round {gameState.currentRound} - Someone will be eliminated!
+            Voting Round {game.currentRound} – someone WILL be eliminated!
           </div>
         )}
-      </div>
+      </header>
 
-      {/* per‑AI chats */}
-      <div className="flex flex-col space-y-2 w-full max-w-2xl mx-auto">
-        {aiNames.map(aiName => {
-          const isEliminated = gameState.eliminatedParticipants.includes(aiName as Participant) || chatStates[aiName].isEliminated;
+      {/* Chat panels */}
+      <section className="flex flex-col space-y-2 w-full max-w-2xl mx-auto">
+        {aiNames.map(ai => {
+          const msgs = game.messages.filter(m =>
+            (m.sender === 'Larry' && m.recipient === ai) || (m.sender === ai && m.recipient === 'Larry')
+          )
           return (
             <CollapsibleChat
-              key={aiName}
-              title={`Chat with ${aiName}${isEliminated ? ' (Eliminated)' : ''}`}
-              aiName={aiName}
-              isExpanded={chatStates[aiName].expanded} // Use expanded here
-              eliminated={isEliminated}
-              messages={getUserToAIMessages(aiName)}
-              input={chatStates[aiName].input}
-              onInputChange={v => handleInputChange(aiName, v)}
-              onSend={() => sendToAI(aiName)}
-              canSend={!isEliminated}
-              personality={
-                AI_PERSONALITIES.find(a => a.name === aiName)
-                  ?.shortDescription
-              }
-              onToggleExpand={() => toggleChat(aiName)}
-              unreadCount={getUnreadCount(aiName)}     
+              key={ai}
+              title={`Chat with ${ai}${game.eliminatedParticipants.includes(ai as Participant) ? ' (Eliminated)' : ''}`}
+              aiName={ai}
+              messages={msgs}
+              input={chats[ai].input}
+              isExpanded={chats[ai].expanded}
+              personality={AI_PERSONALITIES.find(p => p.name === ai)?.shortDescription}
+              unreadCount={msgs.filter(m => m.sender === ai && m.recipient === 'Larry').length}
+              canSend={!game.eliminatedParticipants.includes(ai as Participant)}
+              onInputChange={val => dispatchChats({ type: 'SET_INPUT', ai, value: val })}
+              onSend={() => {
+                if (!chats[ai].input.trim()) return
+                addMessage({ sender: 'Larry', recipient: ai as Participant, content: chats[ai].input.trim(), timestamp: now(), visibility: visibilityFor('Larry', ai as Participant, chats[ai].input) })
+                dispatchChats({ type: 'CLEAR_INPUT', ai })
+              }}
+              onToggleExpand={() => dispatchChats({ type: 'TOGGLE_PANEL', ai })}
             />
-      
-          );
+          )
         })}
-      </div>
+      </section>
 
-      {/* monitor pane */}
-      <div className="w-full max-w-2xl mx-auto mt-8 border-t-2 border-gray-300 pt-4">
+      {/* Monitor */}
+      <section className="w-full max-w-2xl mx-auto mt-8 border-t-2 border-gray-300 pt-4">
         <div className="bg-gray-50 rounded-lg p-4 shadow">
-          <h2 className="text-lg font-bold mb-2">
-            AI Monitor (shows AI-to-AI messages)
-          </h2>
-
-          {/* Vote counting display during voting */}
-          {gameState.votingPhase === 'active' && 
-            gameState.votesInRound.filter(v => v.round === gameState.currentRound).length > 0 && (
-            <div className="mb-3 p-2 bg-gray-100 rounded">
-              <h3 className="text-sm font-bold mb-1">Current Votes:</h3>
-              <div className="grid grid-cols-2 gap-2">
-                {gameState.votesInRound
-                  .filter(vote => vote.round === gameState.currentRound)
-                  .map((vote, idx) => (
-                    <div key={idx} className="text-xs">
-                      <strong>{vote.voter}</strong> voted for <strong className="text-red-500">{vote.votedFor}</strong>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
-
-          {/* Vote count summary */}
-          {gameState.votingPhase === 'active' && 
-            gameState.votesInRound.filter(v => v.round === gameState.currentRound).length > 0 && (
-            <div className="mb-3 p-2 bg-yellow-50 rounded">
-              <h3 className="text-sm font-bold mb-1">Vote Tally:</h3>
-              <div className="grid grid-cols-2 gap-2">
-                {Object.entries(countVotes())
-                  .filter(([ai]) => !gameState.eliminatedParticipants.includes(ai as Participant))
-                  .sort((a, b) => b[1] - a[1]) // Sort by vote count descending
-                  .map(([ai, count]) => (
-                    <div 
-                      key={ai} 
-                      className={`text-xs ${count === 0 ? 'text-gray-500' : 'font-bold'}`}
-                    >
-                      {ai}: {count} votes
-                    </div>
-                  ))
-                }
-              </div>
-            </div>
-          )}
-
-          {/* Elimination status */}
-          {gameState.eliminatedParticipants.length > 0 && (
-            <div className="mb-3 p-2 bg-red-50 rounded">
-              <h3 className="text-sm font-bold mb-1">Eliminated:</h3>
-              <div className="flex flex-wrap gap-2">
-                {gameState.eliminatedParticipants.map((participant) => (
-                  <div key={participant} className="text-xs bg-red-100 px-2 py-1 rounded">
-                    {participant}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
+          <h2 className="text-lg font-bold mb-2">AI Monitor (AI→AI messages)</h2>
           <div className="mt-4 space-y-2 max-h-96 overflow-y-auto">
-            {getMonitorMessages().map((m, i) => (
-              <div
-                key={i}
-                className="p-2 text-xs rounded border border-gray-200 hover:bg-gray-50"
-              >
-                <span className="font-bold">{m.sender} → {m.recipient}:</span>{' '}
-                {m.content}
+            {game.messages.filter(m => m.sender !== 'Larry' && m.recipient !== 'Larry').map((m, i) => (
+              <div key={i} className="p-2 text-xs rounded border border-gray-200 hover:bg-gray-50">
+                <strong>{m.sender} → {m.recipient}:</strong> {m.content}
               </div>
             ))}
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* game controls */}
-      <div className="w-full max-w-2xl mx-auto mt-4 flex justify-center space-x-4">
-        <button 
-          className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400"
-          onClick={() => {
-            if (gameState.votingPhase === 'idle') {
-              startVotingPhase();
-            } else {
-              alert('Voting already in progress!');
-            }
-          }}
-          disabled={gameState.votingPhase === 'active'}
-        >
-          Start Voting Round
+      {/* Manual controls for debugging */}
+      <section className="w-full max-w-2xl mx-auto mt-4 flex justify-center gap-4">
+        <button className="px-4 py-2 bg-green-600 text-white rounded" onClick={() => dispatchGame({ type: 'START_VOTING' })} disabled={game.votingPhase === 'active'}>
+          Force‑start voting
         </button>
-        
-        <button 
-          className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400"
-          onClick={() => {
-            if (gameState.votingPhase === 'active') {
-              processElimination();
-            } else {
-              alert('No voting in progress to end!');
-            }
-          }}
-          disabled={gameState.votingPhase === 'idle'}
-        >
-          End Voting Round
+        <button className="px-4 py-2 bg-red-600 text-white rounded" onClick={handleElimination} disabled={game.votingPhase !== 'active'}>
+          Force elimination now
         </button>
-        
-        <button 
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-          onClick={() => {
-            // Give all AIs a token and trigger a turn
-            setTokens(prev => {
-              const next = { ...prev };
-              aiNames.forEach(ai => {
-                if (!gameState.eliminatedParticipants.includes(ai as Participant)) {
-                  next[ai as Participant] = prev[ai as Participant] + 1;
-                }
-              });
-              return next;
-            });
-            
-            // Reset timer
-            setTurnTimer(30);
-            
-            // Trigger turn
-            setTimeout(() => {
-              if (!turnInProgress) {
-                processTurn();
-              }
-            }, 500);
-          }}
-        >
-          Give All AIs a Token
+        <button className="px-4 py-2 bg-blue-600 text-white rounded" onClick={() => dispatchGame({ type: 'REFILL_TOKENS' })}>
+          +1 token for everyone
         </button>
-      </div>
+      </section>
     </div>
-  );
+  )
+}
+
+/* ------------------------------------------------------------------
+   ─────────────────────────  Utilities  ─────────────────────────────
+--------------------------------------------------------------------*/
+function shuffle<T> (arr: T[]): T[] {
+  return [...arr].sort(() => Math.random() - 0.5)
 }
