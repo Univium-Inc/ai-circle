@@ -1,4 +1,4 @@
-// lib/types.ts - Updated with expanded AI support
+// lib/types.ts - Add these types for voting
 
 // Define a specific type for message visibility
 export type MessageVisibility = 'public' | 'private' | 'highlighted';
@@ -14,11 +14,11 @@ export type Message = {
   visibility: MessageVisibility;
 };
 
-// Add any additional types you might need for your voting competition
+// New type for votes
 export type Vote = {
   voter: Participant;
   votedFor: Participant;
-  reason?: string;
+  timestamp: number;
   round: number;
 };
 
@@ -32,8 +32,20 @@ export type AIPersonality = {
   systemPrompt: string;
 };
 
-// Track the state of the chat UI
+// Extended ChatState with elimination tracking
 export type ChatState = {
   expanded: boolean;
   input: string;
+  isEliminated?: boolean; // Track if AI is eliminated
+};
+
+// Game state for voting mechanism
+export type GameState = {
+  currentRound: number;
+  votingTokensAvailable: Record<Participant, boolean>;
+  votesInRound: Vote[];
+  eliminatedParticipants: Participant[];
+  votingPhase: 'idle' | 'active';
+  nextVotingTime: number;
+  nextEliminationTime: number;
 };

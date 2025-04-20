@@ -5,7 +5,9 @@ import {
   Message,
   MessageVisibility,
   Participant,
-  ChatState
+  ChatState,
+  Vote,
+  GameState
 } from '@/lib/types';
 import { AI_PERSONALITIES, getAllAINames } from '@/lib/aiPersonalities';
 import { CollapsibleChat } from '@/components/CollapsibleChat';
@@ -14,16 +16,23 @@ export default function Home() {
   const aiNames = getAllAINames();
   
   // Reference for interval IDs to ensure proper cleanup
-  const intervalRefs = useRef<{tokenTimer: NodeJS.Timeout | null, countdownTimer: NodeJS.Timeout | null}>({
+  const intervalRefs = useRef<{
+    tokenTimer: NodeJS.Timeout | null, 
+    countdownTimer: NodeJS.Timeout | null,
+    votingTimer: NodeJS.Timeout | null,
+    eliminationTimer: NodeJS.Timeout | null
+  }>({
     tokenTimer: null,
-    countdownTimer: null
+    countdownTimer: null,
+    votingTimer: null,
+    eliminationTimer: null
   });
 
   // — state hooks —
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatStates, setChatStates] = useState<Record<string, ChatState>>(() => {
     const s: Record<string, ChatState> = {};
-    aiNames.forEach(n => { s[n] = { expanded: false, input: '' }; });
+    aiNames.forEach(n => { s[n] = { expanded: false, input: '', isEliminated: false }; });
     return s;
   });
   const [lastSeen, setLastSeen] = useState<Record<string, number>>(() => {
@@ -32,19 +41,42 @@ export default function Home() {
     return s;
   });
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
-  // Only track tokens for AIs
+  
+  // Token tracking for AIs
   const [tokens, setTokens] = useState<Record<Participant, number>>(() => {
     return aiNames.reduce((acc, ai) => {
       acc[ai as Participant] = 1;
       return acc;
     }, {} as Record<Participant, number>);
   });
+  
+  // Game state for voting system
+  const [gameState, setGameState] = useState<GameState>({
+    currentRound: 0,
+    votingTokensAvailable: aiNames.reduce((acc, ai) => {
+      acc[ai as Participant] = false;
+      return acc;
+    }, {} as Record<Participant, boolean>),
+    votesInRound: [],
+    eliminatedParticipants: [],
+    votingPhase: 'idle',
+    nextVotingTime: Date.now() + 120000, // 2 minutes from now
+    nextEliminationTime: Date.now() + 240000 // 4 minutes from now
+  });
+  
   const [turnTimer, setTurnTimer] = useState(30);
+  const [votingTimer, setVotingTimer] = useState(120);
   const [isProcessing, setIsProcessing] = useState(false);
   const [turnInProgress, setTurnInProgress] = useState(false);
   
   // State to track when a token refresh should happen
   const [shouldRefreshTokens, setShouldRefreshTokens] = useState(false);
+  
+  // State to trigger voting phase
+  const [shouldStartVoting, setShouldStartVoting] = useState(false);
+  
+  // State to trigger elimination
+  const [shouldProcessElimination, setShouldProcessElimination] = useState(false);
 
   // — per‑AI logging hook —
   const lastLogTimes = useRef<Record<string, number>>(
@@ -80,11 +112,237 @@ export default function Home() {
     content: string
   ): MessageVisibility => {
     if (sender !== 'Larry' && recipient !== 'Larry') return 'private';
-    const keywords = ['vote','favorite','best','choose','like','prefer'];
+    const keywords = ['vote','favorite','best','choose','like','prefer', 'eliminate'];
     return keywords.some(k => content.toLowerCase().includes(k))
       ? 'highlighted'
       : 'public';
   };
+  
+  // Helper to parse votes from messages
+  const parseVoteFromMessage = (message: Message): Vote | null => {
+    const content = message.content.toLowerCase();
+    if (
+      message.sender !== 'Larry' && 
+      message.recipient === 'Larry' && 
+      (content.includes('vote to eliminate') || content.includes('i vote for'))
+    ) {
+      // Extract who they're voting to eliminate
+      const match = content.match(/eliminate\s+(\w+)|vote for\s+(\w+)/i);
+      if (match) {
+        const votedForName = (match[1] || match[2]);
+        const votedFor = aiNames.find(name => 
+          name.toLowerCase() === votedForName.toLowerCase()
+        );
+        
+        if (votedFor && votedFor !== message.sender) {
+          return {
+            voter: message.sender as Participant,
+            votedFor: votedFor as Participant,
+            timestamp: message.timestamp || Date.now(),
+            round: gameState.currentRound
+          };
+        }
+      }
+    }
+    return null;
+  };
+  
+  // Helper to count votes for each participant
+  const countVotes = (): Record<Participant, number> => {
+    const voteCounts = aiNames.reduce((acc, ai) => {
+      acc[ai as Participant] = 0;
+      return acc;
+    }, {} as Record<Participant, number>);
+    
+    gameState.votesInRound.forEach(vote => {
+      if (voteCounts[vote.votedFor] !== undefined) {
+        voteCounts[vote.votedFor]++;
+      }
+    });
+    
+    return voteCounts;
+  };
+  
+  // Process elimination based on votes
+  const processElimination = useCallback(() => {
+    if (gameState.eliminatedParticipants.length >= aiNames.length - 1) {
+      // Game over, only one AI remains
+      const winner = aiNames.find(ai => 
+        !gameState.eliminatedParticipants.includes(ai as Participant)
+      );
+      
+      // Announce winner
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'Larry',
+          recipient: 'Larry',
+          content: `The game is over! ${winner} is the last one standing and wins the game!`,
+          timestamp: Date.now(),
+          visibility: 'highlighted'
+        }
+      ]);
+      
+      return;
+    }
+    
+    const voteCounts = countVotes();
+    console.log("Vote counts for elimination:", voteCounts);
+    
+    // Find AI with lowest votes, excluding already eliminated
+    let lowestVotes = Infinity;
+    let lowestAI: Participant | null = null;
+    
+    Object.entries(voteCounts).forEach(([ai, count]) => {
+      const participant = ai as Participant;
+      if (
+        !gameState.eliminatedParticipants.includes(participant) && 
+        count < lowestVotes
+      ) {
+        lowestVotes = count;
+        lowestAI = participant;
+      }
+    });
+    
+    if (lowestAI) {
+      // Eliminate this AI
+      setGameState(prev => ({
+        ...prev,
+        eliminatedParticipants: [...prev.eliminatedParticipants, lowestAI as Participant],
+        votingPhase: 'idle',
+        currentRound: prev.currentRound + 1,
+        votesInRound: []
+      }));
+      
+      // Update chat state to mark as eliminated
+      setChatStates(prev => ({
+        ...prev,
+        [lowestAI]: {
+          ...prev[lowestAI],
+          isEliminated: true
+        }
+      }));
+      
+      // Announce elimination
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'Larry',
+          recipient: 'Larry',
+          content: `${lowestAI} has been eliminated from the game in round ${gameState.currentRound}!`,
+          timestamp: Date.now(),
+          visibility: 'highlighted'
+        }
+      ]);
+      
+      // Reset voting tokens for next round
+      const resetVotingTokens = aiNames.reduce((acc, ai) => {
+        acc[ai as Participant] = false;
+        return acc;
+      }, {} as Record<Participant, boolean>);
+      
+      setGameState(prev => ({
+        ...prev,
+        votingTokensAvailable: resetVotingTokens,
+        nextVotingTime: Date.now() + 120000 // 2 minutes until next voting round
+      }));
+    }
+  }, [gameState, aiNames]);
+  
+  // Start voting phase
+  const startVotingPhase = useCallback(() => {
+    console.log("Starting voting phase for round", gameState.currentRound + 1);
+    
+    // Give each non-eliminated AI a voting token
+    const votingTokens = { ...gameState.votingTokensAvailable };
+    aiNames.forEach(ai => {
+      if (!gameState.eliminatedParticipants.includes(ai as Participant)) {
+        votingTokens[ai as Participant] = true;
+      }
+    });
+    
+    setGameState(prev => ({
+      ...prev,
+      votingTokensAvailable: votingTokens,
+      votingPhase: 'active',
+      currentRound: prev.currentRound + 1,
+      nextEliminationTime: Date.now() + 120000 // Elimination in 2 minutes
+    }));
+    
+    // Announce voting phase
+    setMessages(prev => [
+      ...prev,
+      {
+        sender: 'Larry',
+        recipient: 'Larry',
+        content: `Round ${gameState.currentRound + 1} voting has begun! AIs have 2 minutes to vote for who should be eliminated.`,
+        timestamp: Date.now(),
+        visibility: 'highlighted'
+      }
+    ]);
+    
+    // Ask each AI who they vote to eliminate
+    const activeAIs = aiNames.filter(ai => 
+      !gameState.eliminatedParticipants.includes(ai as Participant)
+    );
+    
+    activeAIs.forEach(ai => {
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'Larry',
+          recipient: ai as Participant,
+          content: `Who do you vote to eliminate from the game and why?`,
+          timestamp: Date.now(),
+          visibility: 'highlighted'
+        }
+      ]);
+    });
+  }, [gameState, aiNames]);
+
+  // Process votes from messages
+  useEffect(() => {
+    if (gameState.votingPhase !== 'active') return;
+    
+    // Check for new votes in messages
+    messages.forEach(message => {
+      const vote = parseVoteFromMessage(message);
+      if (vote) {
+        // Check if this AI has already voted in this round
+        const hasVoted = gameState.votesInRound.some(v => 
+          v.voter === vote.voter && v.round === gameState.currentRound
+        );
+        
+        // Check if they have a voting token
+        const hasToken = gameState.votingTokensAvailable[vote.voter];
+        
+        if (!hasVoted && hasToken) {
+          console.log(`Recorded vote: ${vote.voter} voted to eliminate ${vote.votedFor}`);
+          
+          // Add vote and remove token
+          setGameState(prev => {
+            const newTokens = { ...prev.votingTokensAvailable };
+            newTokens[vote.voter] = false;
+            
+            return {
+              ...prev,
+              votesInRound: [...prev.votesInRound, vote],
+              votingTokensAvailable: newTokens
+            };
+          });
+          
+          // Highlight the vote
+          setMessages(prev => 
+            prev.map(m => 
+              m === message 
+                ? { ...m, visibility: 'highlighted' } 
+                : m
+            )
+          );
+        }
+      }
+    });
+  }, [messages, gameState]);
 
   const getUserToAIMessages = useCallback(
     (aiName: string) =>
@@ -115,6 +373,12 @@ export default function Home() {
   // — single AI turn —
   const processAIMessage = useCallback(
     async (ai: Exclude<Participant,'Larry'>) => {
+      // Skip eliminated AIs
+      if (gameState.eliminatedParticipants.includes(ai)) {
+        console.log(`Skipping ${ai} - eliminated from the game`);
+        return false;
+      }
+      
       setIsProcessing(true);
       try {
         const history = messages
@@ -126,13 +390,19 @@ export default function Home() {
         const { content, target } = await getAIResponse({
           aiName: ai,
           history,
-          userName: 'Larry'
+          userName: 'Larry',
+          gameState // Pass game state for voting context
         });
 
-        const finalTarget =
-          target === 'Larry' || (aiNames.includes(target) && target !== ai)
-            ? target
-            : 'Larry';
+        // Validate target isn't eliminated
+        let finalTarget = target;
+        if (
+          target !== 'Larry' && 
+          gameState.eliminatedParticipants.includes(target as Participant)
+        ) {
+          console.log(`${ai} tried to message eliminated ${target}, redirecting to Larry`);
+          finalTarget = 'Larry';
+        }
 
         const newMsg: Message = {
           sender: ai,
@@ -151,7 +421,7 @@ export default function Home() {
         setIsProcessing(false);
       }
     },
-    [aiNames, messages]
+    [aiNames, messages, gameState]
   );
 
   // — all AIs in random order, spending exactly one token each —
@@ -167,7 +437,18 @@ export default function Home() {
 
       try {
         const available = { ...tokens };
-        const order = [...aiNames].sort(() => Math.random() - 0.5);
+        // Randomize order but prioritize AIs who haven't voted in voting phase
+        let order = [...aiNames]
+          .filter(ai => !gameState.eliminatedParticipants.includes(ai as Participant))
+          .sort(() => Math.random() - 0.5);
+        
+        // If in voting phase, prioritize AIs who still have voting tokens
+        if (gameState.votingPhase === 'active') {
+          order = [
+            ...order.filter(ai => gameState.votingTokensAvailable[ai as Participant]),
+            ...order.filter(ai => !gameState.votingTokensAvailable[ai as Participant])
+          ];
+        }
 
         for (const ai of order) {
           if (available[ai as Participant] > 0) {
@@ -187,7 +468,7 @@ export default function Home() {
         setTurnInProgress(false);
       }
     },
-    [aiNames, tokens, processAIMessage]
+    [aiNames, tokens, processAIMessage, gameState]
   );
 
   // — send message helper (no user token gating) —
@@ -196,6 +477,15 @@ export default function Home() {
     recipient: Participant,
     content: string
   ) => {
+    // Prevent messaging eliminated AIs
+    if (
+      recipient !== 'Larry' && 
+      gameState.eliminatedParticipants.includes(recipient)
+    ) {
+      alert(`${recipient} has been eliminated and can no longer receive messages.`);
+      return;
+    }
+    
     if (!content.trim()) return;
     const msg: Message = {
       sender,
@@ -218,6 +508,11 @@ export default function Home() {
 
   // — UI handlers —
   const sendToAI = (aiName: string) => {
+    if (gameState.eliminatedParticipants.includes(aiName as Participant)) {
+      alert(`${aiName} has been eliminated and can no longer receive messages.`);
+      return;
+    }
+    
     if (!chatStates[aiName].input.trim()) return;
     sendMessage('Larry', aiName as Participant, chatStates[aiName].input);
     setChatStates(s => ({
@@ -252,7 +547,7 @@ export default function Home() {
   const handleInputChange = (aiName: string, v: string) =>
     setChatStates(s => ({ ...s, [aiName]: { ...s[aiName], input: v } }));
 
-  // Timer countdown effect - Uses ref to prevent recreation
+  // Timer countdown effect for message tokens
   useEffect(() => {
     // Clear any existing interval
     if (intervalRefs.current.countdownTimer) {
@@ -269,6 +564,15 @@ export default function Home() {
         }
         return newValue;
       });
+      
+      // Also update voting timer if in voting phase
+      if (gameState.votingPhase === 'active') {
+        const timeRemaining = Math.max(0, Math.floor((gameState.nextEliminationTime - Date.now()) / 1000));
+        setVotingTimer(timeRemaining);
+      } else {
+        const timeToNextVoting = Math.max(0, Math.floor((gameState.nextVotingTime - Date.now()) / 1000));
+        setVotingTimer(timeToNextVoting);
+      }
     }, 1000);
     
     // Store reference for cleanup
@@ -280,18 +584,20 @@ export default function Home() {
         intervalRefs.current.countdownTimer = null;
       }
     };
-  }, []); // No dependencies to prevent recreation
+  }, [gameState.votingPhase, gameState.nextEliminationTime, gameState.nextVotingTime]);
 
-  // Token refresh effect - Triggered when timer hits zero
+  // Message token refresh effect - Triggered when timer hits zero
   useEffect(() => {
     if (shouldRefreshTokens) {
       console.log("Refreshing tokens and resetting timer");
       
-      // Reset tokens
+      // Reset tokens for non-eliminated AIs
       setTokens(prev => {
         const next = { ...prev };
         aiNames.forEach(ai => {
-          next[ai as Participant] = Math.min(prev[ai as Participant] + 1, 3);
+          if (!gameState.eliminatedParticipants.includes(ai as Participant)) {
+            next[ai as Participant] = Math.min(prev[ai as Participant] + 1, 3);
+          }
         });
         return next;
       });
@@ -309,7 +615,77 @@ export default function Home() {
         }, 500);
       }
     }
-  }, [shouldRefreshTokens, aiNames, processTurn, turnInProgress]);
+  }, [shouldRefreshTokens, aiNames, processTurn, turnInProgress, gameState.eliminatedParticipants]);
+
+  // Voting phase check - every 2 minutes
+  useEffect(() => {
+    // Clear any existing interval
+    if (intervalRefs.current.votingTimer) {
+      clearInterval(intervalRefs.current.votingTimer);
+    }
+    
+    // Check if it's time to start voting
+    const votingCheckInterval = setInterval(() => {
+      if (
+        gameState.votingPhase === 'idle' && 
+        Date.now() >= gameState.nextVotingTime
+      ) {
+        setShouldStartVoting(true);
+      }
+    }, 5000); // Check every 5 seconds
+    
+    intervalRefs.current.votingTimer = votingCheckInterval;
+    
+    return () => {
+      if (intervalRefs.current.votingTimer) {
+        clearInterval(intervalRefs.current.votingTimer);
+        intervalRefs.current.votingTimer = null;
+      }
+    };
+  }, [gameState.votingPhase, gameState.nextVotingTime]);
+  
+  // Elimination check - after voting phase
+  useEffect(() => {
+    // Clear any existing interval
+    if (intervalRefs.current.eliminationTimer) {
+      clearInterval(intervalRefs.current.eliminationTimer);
+    }
+    
+    // Check if it's time to eliminate someone
+    const eliminationCheckInterval = setInterval(() => {
+      if (
+        gameState.votingPhase === 'active' && 
+        Date.now() >= gameState.nextEliminationTime
+      ) {
+        setShouldProcessElimination(true);
+      }
+    }, 5000); // Check every 5 seconds
+    
+    intervalRefs.current.eliminationTimer = eliminationCheckInterval;
+    
+    return () => {
+      if (intervalRefs.current.eliminationTimer) {
+        clearInterval(intervalRefs.current.eliminationTimer);
+        intervalRefs.current.eliminationTimer = null;
+      }
+    };
+  }, [gameState.votingPhase, gameState.nextEliminationTime]);
+  
+  // Handle voting phase start
+  useEffect(() => {
+    if (shouldStartVoting) {
+      startVotingPhase();
+      setShouldStartVoting(false);
+    }
+  }, [shouldStartVoting, startVotingPhase]);
+  
+  // Handle elimination processing
+  useEffect(() => {
+    if (shouldProcessElimination) {
+      processElimination();
+      setShouldProcessElimination(false);
+    }
+  }, [shouldProcessElimination, processElimination]);
 
   // Initial setup of token refresh timer
   useEffect(() => {
@@ -341,41 +717,113 @@ export default function Home() {
         <h1 className="text-xl font-bold mb-2">
           The Circle: AI Edition
         </h1>
-        ⏳ Next in: {turnTimer}s
-        {aiNames.map(ai => (
-          <span key={ai}> | {ai} tokens: {tokens[ai as Participant]}</span>
-        ))}
+        <div className="flex justify-between mb-2">
+          <div>⏳ Next tokens in: {turnTimer}s</div>
+          <div>
+            {gameState.votingPhase === 'active' 
+              ? `⚡ Voting ends in: ${votingTimer}s` 
+              : `⚡ Next voting in: ${votingTimer}s`}
+          </div>
+        </div>
+        <div className="flex flex-wrap justify-center gap-2">
+          {aiNames.map(ai => {
+            const isEliminated = gameState.eliminatedParticipants.includes(ai as Participant);
+            const hasVotingToken = gameState.votingTokensAvailable[ai as Participant];
+            return (
+              <span 
+                key={ai} 
+                className={`px-2 py-1 rounded ${isEliminated ? 'bg-gray-300 line-through' : 'bg-blue-100'}`}
+              >
+                {ai} tokens: {tokens[ai as Participant]}
+                {hasVotingToken && !isEliminated && " 🗳️"}
+                {isEliminated && " (eliminated)"}
+              </span>
+            );
+          })}
+        </div>
+        {gameState.votingPhase === 'active' && (
+          <div className="mt-2 text-red-500 font-bold">
+            Voting Round {gameState.currentRound} - Someone will be eliminated!
+          </div>
+        )}
       </div>
 
       {/* per‑AI chats */}
       <div className="flex flex-col space-y-2 w-full max-w-2xl mx-auto">
-        {aiNames.map(aiName => (
-          <CollapsibleChat
-            key={aiName}
-            title={`Chat with ${aiName}`}
-            aiName={aiName}
-            messages={getUserToAIMessages(aiName)}
-            input={chatStates[aiName].input}
-            onInputChange={v => handleInputChange(aiName, v)}
-            onSend={() => sendToAI(aiName)}
-            canSend={true}
-            personality={
-              AI_PERSONALITIES.find(a => a.name === aiName)
-                ?.shortDescription
-            }
-            isExpanded={chatStates[aiName].expanded}
-            onToggleExpand={() => toggleChat(aiName)}
-            unreadCount={getUnreadCount(aiName)}
-          />
-        ))}
+        {aiNames.map(aiName => {
+          const isEliminated = gameState.eliminatedParticipants.includes(aiName as Participant);
+          return (
+            <CollapsibleChat
+              key={aiName}
+              title={`Chat with ${aiName}${isEliminated ? ' (Eliminated)' : ''}`}
+              aiName={aiName}
+              messages={getUserToAIMessages(aiName)}
+              input={chatStates[aiName].input}
+              onInputChange={v => handleInputChange(aiName, v)}
+              onSend={() => sendToAI(aiName)}
+              canSend={!isEliminated}
+              personality={
+                AI_PERSONALITIES.find(a => a.name === aiName)
+                  ?.shortDescription
+              }
+              isExpanded={chatStates[aiName].expanded}
+              onToggleExpand={() => toggleChat(aiName)}
+              unreadCount={getUnreadCount(aiName)}
+            />
+          );
+        })}
       </div>
 
       {/* AI‑to‑AI monitor */}
       <div className="w-full max-w-2xl mx-auto bg-white shadow rounded p-4 h-[400px] overflow-y-auto">
         <h2 className="text-lg font-bold mb-2">AI Monitor Log</h2>
-        <p className="text-xs text-gray-500 mb-2 italic">
-          Watch the AIs interact
-        </p>
+        <div className="flex justify-between items-center mb-2">
+          <p className="text-xs text-gray-500 italic">
+            Watch the AIs interact
+          </p>
+          {gameState.votingPhase === 'active' && (
+            <div className="text-xs text-red-500 font-bold">
+              Voting in progress!
+            </div>
+          )}
+        </div>
+        
+        {/* Vote counting display during voting */}
+        {/* Vote counting display during voting */}
+        {gameState.votingPhase === 'active' && gameState.votesInRound.length > 0 && (
+          <div className="mb-3 p-2 bg-gray-100 rounded">
+            <h3 className="text-sm font-bold mb-1">Current Votes:</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {gameState.votesInRound.map((vote, idx) => (
+                <div key={idx} className="text-xs">
+                  <strong>{vote.voter}</strong> voted for <strong className="text-red-500">{vote.votedFor}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Vote count summary */}
+        {gameState.votingPhase === 'active' && gameState.votesInRound.length > 0 && (
+          <div className="mb-3 p-2 bg-yellow-50 rounded">
+            <h3 className="text-sm font-bold mb-1">Vote Tally:</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(countVotes())
+                .filter(([ai]) => !gameState.eliminatedParticipants.includes(ai as Participant))
+                .sort((a, b) => b[1] - a[1]) // Sort by vote count descending
+                .map(([ai, count]) => (
+                  <div 
+                    key={ai} 
+                    className={`text-xs ${count === 0 ? 'text-gray-500' : 'font-bold'}`}
+                  >
+                    {ai}: {count} votes
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+        )}
+        
         {getMonitorMessages().map((m, i) => {
           const idx = AI_PERSONALITIES.findIndex(a => a.name === m.sender);
           const colors = [
@@ -383,6 +831,11 @@ export default function Home() {
             'bg-pink-50','bg-yellow-50','bg-indigo-50'
           ];
           const bg = colors[idx % colors.length];
+          
+          // Add elimination status indicator
+          const isEliminatedSender = gameState.eliminatedParticipants.includes(m.sender as Participant);
+          const isEliminatedRecipient = gameState.eliminatedParticipants.includes(m.recipient as Participant);
+          
           return (
             <div
               key={i}
@@ -390,13 +843,46 @@ export default function Home() {
                 m.visibility === 'highlighted'
                   ? 'border border-yellow-300'
                   : ''
-              }`}
+              } ${isEliminatedSender ? 'opacity-50' : ''}`}
             >
-              <strong>{m.sender} → {m.recipient}:</strong> {m.content}
+              <strong>
+                {m.sender} {isEliminatedSender ? '(eliminated)' : ''} → {m.recipient} {isEliminatedRecipient ? '(eliminated)' : ''}:
+              </strong> {m.content}
             </div>
           );
         })}
       </div>
+
+      {/* Vote and Elimination Status */}
+      {gameState.currentRound > 0 && (
+        <div className="w-full max-w-2xl mx-auto bg-white shadow rounded p-4">
+          <h2 className="text-lg font-bold mb-2">Game Status</h2>
+          <div className="mb-2">
+            <div className="text-sm font-bold">Current Round: {gameState.currentRound}</div>
+            <div className="text-sm">
+              {gameState.eliminatedParticipants.length > 0 
+                ? `Eliminated: ${gameState.eliminatedParticipants.join(', ')}` 
+                : 'No one has been eliminated yet'
+              }
+            </div>
+          </div>
+          
+          {/* Show previous round results */}
+          {gameState.currentRound > 1 && (
+            <div className="text-xs text-gray-600">
+              Previous rounds: 
+              {Array.from({length: gameState.currentRound - 1}, (_, i) => i + 1).map(round => {
+                const eliminatedInRound = gameState.eliminatedParticipants[round - 1];
+                return (
+                  <span key={round} className="ml-1">
+                    Round {round}: {eliminatedInRound} eliminated.
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* debug panel */}
       {process.env.NODE_ENV === 'development' && (
@@ -406,8 +892,18 @@ export default function Home() {
             <div>Expanded Chat: {expandedChat || 'None'}</div>
             <div>Turn In Progress: {turnInProgress ? 'Yes' : 'No'}</div>
             <div>Processing: {isProcessing ? 'Yes' : 'No'}</div>
+            <div>Voting Phase: {gameState.votingPhase}</div>
+            <div>Current Round: {gameState.currentRound}</div>
             <div>Turn Timer: {turnTimer}s</div>
-            <div>Should Refresh Tokens: {shouldRefreshTokens ? 'Yes' : 'No'}</div>
+            <div>Voting Timer: {votingTimer}s</div>
+            <div>Eliminated: {gameState.eliminatedParticipants.join(', ') || 'None'}</div>
+            <div>
+              Voting Tokens: {Object.entries(gameState.votingTokensAvailable)
+                .filter(([ai]) => !gameState.eliminatedParticipants.includes(ai as Participant))
+                .filter(([_, hasToken]) => hasToken)
+                .map(([ai]) => ai)
+                .join(', ') || 'None'}
+            </div>
           </div>
         </div>
       )}

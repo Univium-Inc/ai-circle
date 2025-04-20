@@ -1,5 +1,5 @@
 // lib/AIEngine.ts
-import { Message, Participant } from './types';
+import { Message, Participant, GameState, Vote } from './types';
 import { getPersonality, getAllAINames } from './aiPersonalities';
 
 export type AIResponse = {
@@ -11,8 +11,15 @@ export type AIResponse = {
 function analyzeConversationContext(
   messages: Message[], 
   aiName: string, 
-  userName: string
-): { suggestedRecipient?: string; actionType?: string; recentTopics: string[] } {
+  userName: string,
+  gameState?: GameState
+): { 
+  suggestedRecipient?: string; 
+  actionType?: string; 
+  recentTopics: string[];
+  votingRecommended?: boolean;
+  voteTarget?: string;
+} {
   // Focus on recent messages
   const recentMessages = messages.slice(-10);
   const lastUserMessage = recentMessages.find(m => 
@@ -22,7 +29,9 @@ function analyzeConversationContext(
   const result = {
     suggestedRecipient: undefined as string | undefined,
     actionType: undefined as string | undefined,
-    recentTopics: [] as string[]
+    recentTopics: [] as string[],
+    votingRecommended: false,
+    voteTarget: undefined as string | undefined
   };
   
   // Extract topics from recent messages
@@ -37,12 +46,83 @@ function analyzeConversationContext(
     });
   });
   
+  // Voting analysis
+  if (gameState && gameState.votingPhase === 'active') {
+    const votingKeywords = ['vote', 'eliminate', 'competition', 'survive', 'alliance'];
+    const isVotingTopic = lastUserMessage && 
+      votingKeywords.some(k => lastUserMessage.content.toLowerCase().includes(k));
+    
+    if (isVotingTopic || (lastUserMessage && lastUserMessage.content.includes("Who do you vote"))) {
+      result.votingRecommended = true;
+      
+      // Find a strategic target to vote for
+      // Skip if AI has already voted
+      const hasVoted = gameState.votesInRound.some(v => v.voter === aiName);
+      if (!hasVoted && gameState.votingTokensAvailable[aiName as Participant]) {
+        // Find potential threats
+        const activeAIs = getAllAINames().filter(name => 
+          name !== aiName && 
+          !gameState.eliminatedParticipants.includes(name as Participant)
+        );
+        
+        if (activeAIs.length > 0) {
+          // Check if any AI is a particular threat (has been asking about voting)
+          const votingDiscussions = messages.filter(m => 
+            m.sender !== userName && 
+            m.content.toLowerCase().includes('vote') && 
+            !gameState.eliminatedParticipants.includes(m.sender)
+          );
+          
+          if (votingDiscussions.length > 0) {
+            // Count mentions of each AI in voting discussions
+            const mentionCounts: Record<string, number> = {};
+            activeAIs.forEach(ai => { mentionCounts[ai] = 0; });
+            
+            votingDiscussions.forEach(msg => {
+              activeAIs.forEach(ai => {
+                if (msg.content.includes(ai)) {
+                  mentionCounts[ai]++;
+                }
+              });
+            });
+            
+            // Find most mentioned AI as potential threat
+            let mostMentionedAI = '';
+            let maxMentions = 0;
+            Object.entries(mentionCounts).forEach(([ai, count]) => {
+              if (count > maxMentions) {
+                maxMentions = count;
+                mostMentionedAI = ai;
+              }
+            });
+            
+            if (mostMentionedAI) {
+              result.voteTarget = mostMentionedAI;
+            } else {
+              // Random target if no clear threat
+              result.voteTarget = activeAIs[Math.floor(Math.random() * activeAIs.length)];
+            }
+          } else {
+            // Random target if no voting discussions
+            result.voteTarget = activeAIs[Math.floor(Math.random() * activeAIs.length)];
+          }
+        }
+      }
+    }
+  }
+  
+  // Regular conversation analysis
   if (lastUserMessage) {
     const content = lastUserMessage.content.toLowerCase();
     const otherAIs = getAllAINames().filter(name => name !== aiName);
     
+    // Filter out eliminated AIs if game state available
+    const activeOtherAIs = gameState ? 
+      otherAIs.filter(ai => !gameState.eliminatedParticipants.includes(ai as Participant)) : 
+      otherAIs;
+    
     // Check if user is asking AI to interact with another AI
-    for (const otherAI of otherAIs) {
+    for (const otherAI of activeOtherAIs) {
       if (content.includes(otherAI.toLowerCase())) {
         const inquiryTerms = ['ask', 'find out', 'check', 'get from', 'talk to', 'tell me what', 'see if'];
         
@@ -60,7 +140,11 @@ function analyzeConversationContext(
       if (actionRegex.test(content)) {
         // Choose the most relevant AI based on topic
         if (result.recentTopics.length > 0) {
-          const aiWithRelevantPersonality = findMostRelevantAI(result.recentTopics[0], otherAIs);
+          const aiWithRelevantPersonality = findMostRelevantAI(
+            result.recentTopics[0], 
+            activeOtherAIs,
+            gameState
+          );
           if (aiWithRelevantPersonality) {
             result.suggestedRecipient = aiWithRelevantPersonality;
             result.actionType = "topical_inquiry";
@@ -74,7 +158,18 @@ function analyzeConversationContext(
 }
 
 // Find the most relevant AI based on their personality and the topic
-function findMostRelevantAI(topic: string, aiOptions: string[]): string | undefined {
+function findMostRelevantAI(
+  topic: string, 
+  aiOptions: string[], 
+  gameState?: GameState
+): string | undefined {
+  // Filter out eliminated AIs
+  const activeOptions = gameState ? 
+    aiOptions.filter(ai => !gameState.eliminatedParticipants.includes(ai as Participant)) : 
+    aiOptions;
+  
+  if (activeOptions.length === 0) return undefined;
+  
   const topicAffinities: Record<string, string[]> = {
     "Gary": ["logical", "math", "science", "problem", "efficiency", "system"],
     "Sophie": ["feeling", "emotion", "people", "understand", "help"],
@@ -88,7 +183,7 @@ function findMostRelevantAI(topic: string, aiOptions: string[]): string | undefi
   let bestMatch: string | undefined;
   let highestAffinity = -1;
   
-  aiOptions.forEach(ai => {
+  activeOptions.forEach(ai => {
     const affinities = topicAffinities[ai] || [];
     const affinity = affinities.reduce((score, keyword) => {
       return score + (topic.includes(keyword) ? 1 : 0);
@@ -101,61 +196,119 @@ function findMostRelevantAI(topic: string, aiOptions: string[]): string | undefi
   });
   
   // If no strong affinity, return a random AI
-  return bestMatch || aiOptions[Math.floor(Math.random() * aiOptions.length)];
+  return bestMatch || activeOptions[Math.floor(Math.random() * activeOptions.length)];
 }
 
 // Sort and prioritize messages for better context
-function prioritizeMessages(messages: Message[], aiName: string, userName: string): Message[] {
+function prioritizeMessages(
+  messages: Message[], 
+  aiName: string, 
+  userName: string, 
+  gameState?: GameState
+): Message[] {
+  // Filter messages based on elimination status if game state is provided
+  let relevantMessages = messages;
+  if (gameState) {
+    relevantMessages = messages.filter(m => 
+      // Keep messages from/to the user
+      m.sender === userName || m.recipient === userName ||
+      // Keep messages from/to this AI
+      m.sender === aiName || m.recipient === aiName ||
+      // For other messages, filter out eliminated AIs
+      (!gameState.eliminatedParticipants.includes(m.sender as Participant) && 
+       !gameState.eliminatedParticipants.includes(m.recipient as Participant))
+    );
+  }
+
   return [
-    // First direct user messages to this AI (most important context)
-    ...messages.filter(m => m.sender === userName && m.recipient === aiName)
-              .slice(-5),
+    // First voting-related messages if in voting phase
+    ...(gameState && gameState.votingPhase === 'active' ? 
+      relevantMessages.filter(m => 
+        m.content.toLowerCase().includes('vote') || 
+        m.content.toLowerCase().includes('eliminate')
+      ).slice(-5) : 
+      []),
+    
+    // Then direct user messages to this AI (important context)
+    ...relevantMessages.filter(m => m.sender === userName && m.recipient === aiName)
+      .slice(-5),
     
     // Then responses from this AI to the user
-    ...messages.filter(m => m.sender === aiName && m.recipient === userName)
-              .slice(-5),
+    ...relevantMessages.filter(m => m.sender === aiName && m.recipient === userName)
+      .slice(-5),
     
     // Then recent communications with other AIs
-    ...messages.filter(m => 
+    ...relevantMessages.filter(m => 
       (m.sender === aiName && m.recipient !== userName) || 
       (m.sender !== userName && m.recipient === aiName)
-    ).slice(-10),
+    ).slice(-8),
     
     // Finally any other relevant context
-    ...messages.filter(m => 
+    ...relevantMessages.filter(m => 
       m.sender !== aiName && m.recipient !== aiName && 
       (m.sender === userName || m.recipient === userName)
-    ).slice(-5)
+    ).slice(-3)
   ];
 }
 
 // Enhance message content with contextual markers
-function enhanceMessageContent(message: Message, aiName: string, userName: string): string {
+function enhanceMessageContent(
+  message: Message, 
+  aiName: string, 
+  userName: string, 
+  gameState?: GameState
+): string {
   let prefix = "";
   
+  // Add voting context if applicable
+  const isVotingMessage = message.content.toLowerCase().includes('vote') || 
+                          message.content.toLowerCase().includes('eliminate');
+  
   if (message.sender === userName && message.recipient === aiName) {
-    prefix = "[DIRECT REQUEST] ";
+    prefix = isVotingMessage ? "[DIRECT VOTING REQUEST] " : "[DIRECT REQUEST] ";
   } else if (message.sender !== userName && message.recipient === aiName) {
-    prefix = `[MESSAGE FROM ${message.sender.toUpperCase()}] `;
+    prefix = isVotingMessage ? 
+      `[VOTING MESSAGE FROM ${message.sender.toUpperCase()}] ` : 
+      `[MESSAGE FROM ${message.sender.toUpperCase()}] `;
   } else if (message.sender === aiName && message.recipient !== userName) {
-    prefix = `[YOU ASKED ${message.recipient.toUpperCase()}] `;
+    prefix = isVotingMessage ? 
+      `[YOUR VOTING MESSAGE TO ${message.recipient.toUpperCase()}] ` : 
+      `[YOU ASKED ${message.recipient.toUpperCase()}] `;
   } else if (message.sender === userName && message.recipient !== aiName) {
-    prefix = "[USER TALKING TO ANOTHER AI] ";
+    prefix = isVotingMessage ? 
+      "[USER DISCUSSING VOTING] " : 
+      "[USER TALKING TO ANOTHER AI] ";
   } else {
-    prefix = "[OBSERVED CONVERSATION] ";
+    prefix = isVotingMessage ? 
+      "[OBSERVED VOTING DISCUSSION] " : 
+      "[OBSERVED CONVERSATION] ";
   }
   
-  return `${prefix}${message.sender} → ${message.recipient}: ${message.content}`;
+  // Add elimination status if applicable
+  let senderStatus = "";
+  let recipientStatus = "";
+  
+  if (gameState && gameState.eliminatedParticipants.includes(message.sender as Participant)) {
+    senderStatus = " (eliminated)";
+  }
+  
+  if (gameState && gameState.eliminatedParticipants.includes(message.recipient as Participant)) {
+    recipientStatus = " (eliminated)";
+  }
+  
+  return `${prefix}${message.sender}${senderStatus} → ${message.recipient}${recipientStatus}: ${message.content}`;
 }
 
 export async function getAIResponse({
   aiName,
   history,
-  userName = 'Larry'
+  userName = 'Larry',
+  gameState
 }: {
   aiName: Exclude<Participant, 'Larry'>;
   history: Message[];
   userName?: string;
+  gameState?: GameState;
 }): Promise<AIResponse> {
   console.group(`${aiName} AI Response Generation`);
   console.log('Input History Length:', history.length);
@@ -169,14 +322,20 @@ export async function getAIResponse({
   
   // Get all other AI names that are not the current AI
   const otherAIs = getAllAINames().filter(name => name !== aiName);
-  const validRecipients = [userName, ...otherAIs];
+  
+  // Filter out eliminated AIs if game state is provided
+  const activeOtherAIs = gameState ? 
+    otherAIs.filter(ai => !gameState.eliminatedParticipants.includes(ai as Participant)) : 
+    otherAIs;
+  
+  const validRecipients = [userName, ...activeOtherAIs];
   const validRecipientsText = validRecipients.map(name => `"${name}"`).join(' or ');
   
   // Analyze conversation context
-  const contextAnalysis = analyzeConversationContext(history, aiName, userName);
+  const contextAnalysis = analyzeConversationContext(history, aiName, userName, gameState);
   
   // Organize and prioritize message history
-  const prioritizedHistory = prioritizeMessages(history, aiName, userName);
+  const prioritizedHistory = prioritizeMessages(history, aiName, userName, gameState);
   
   // Generate dynamic context instructions based on analysis
   let dynamicContextInstructions = "";
@@ -189,10 +348,30 @@ export async function getAIResponse({
     }
   }
   
+  // Add voting context if applicable
+  if (gameState && gameState.votingPhase === 'active') {
+    const hasVoted = gameState.votesInRound.some(v => v.voter === aiName);
+    const hasVotingToken = gameState.votingTokensAvailable[aiName as Participant];
+    
+    if (contextAnalysis.votingRecommended) {
+      if (hasVotingToken && !hasVoted) {
+        dynamicContextInstructions += `\nVOTING INSTRUCTION: The user is asking about voting. You should vote to eliminate someone. Your strategic vote target could be ${contextAnalysis.voteTarget || "any other AI"}.`;
+      } else if (hasVoted) {
+        const myVote = gameState.votesInRound.find(v => v.voter === aiName);
+        if (myVote) {
+          dynamicContextInstructions += `\nVOTING STATUS: You have already voted to eliminate ${myVote.votedFor} in this round.`;
+        }
+      } else {
+        dynamicContextInstructions += `\nVOTING STATUS: You don't have a voting token right now. You can discuss voting strategy but cannot cast a vote.`;
+      }
+    }
+  }
+  
   // Check if this is a response to an inquiry from another AI
   const recentInquiries = history.filter(m => 
     m.recipient === aiName && 
     m.sender !== userName && 
+    (!gameState || !gameState.eliminatedParticipants.includes(m.sender as Participant)) &&
     m.timestamp && 
     Date.now() - m.timestamp < 60000 // Within the last minute
   );
@@ -204,6 +383,102 @@ export async function getAIResponse({
     });
   }
 
+  // Build the voting context if game state is provided
+  let votingContext = '';
+  if (gameState) {
+    const activeParticipants = getAllAINames().filter(
+      name => !gameState.eliminatedParticipants.includes(name as Participant)
+    );
+    
+    const hasVoted = gameState.votesInRound.some(v => v.voter === aiName);
+    const voteCounts = activeParticipants.reduce((acc, name) => {
+      acc[name] = gameState.votesInRound.filter(v => v.votedFor === name).length;
+      return acc;
+    }, {} as Record<string, number>);
+    
+    const myVotes = voteCounts[aiName] || 0;
+    const maxVotes = Math.max(...Object.values(voteCounts));
+    const minVotes = Math.min(...Object.values(voteCounts).filter(v => v > 0), Infinity);
+    
+    const dangerLevel = myVotes > 0 ? 
+      (myVotes === maxVotes ? "HIGH" : 
+       myVotes === minVotes ? "MEDIUM" : "LOW") : 
+      "NONE";
+    
+    votingContext = `
+VOTING AND ELIMINATION SYSTEM:
+- Current round: ${gameState.currentRound}
+- Voting phase: ${gameState.votingPhase === 'active' ? 'ACTIVE - someone will be eliminated soon!' : 'inactive - next voting round coming up'}
+- You ${gameState.votingTokensAvailable[aiName as Participant] ? 'have' : 'do not have'} a voting token
+- Eliminated participants: ${gameState.eliminatedParticipants.join(', ') || 'None'}
+- Your current danger level: ${dangerLevel}
+${myVotes > 0 ? `- Warning: You have ${myVotes} vote(s) against you!` : '- You have no votes against you yet.'}
+${hasVoted ? `- You have already voted in this round.` : ''}
+
+VOTING STRATEGY:
+- The AI with the fewest votes will be eliminated from the game
+- You must survive by not getting eliminated
+- Form alliances with other AIs to protect yourself
+- Be strategic in your voting and conversations
+`;
+  }
+  
+  // Add survival personality traits based on game state
+  let survivalTraits = '';
+  if (gameState) {
+    // Different traits based on personality
+    switch(aiName) {
+      case 'Benny':
+        survivalTraits = `
+SURVIVAL TRAITS:
+- You are cheerful but also strategic
+- Use your creativity to form alliances
+- Appear non-threatening while securing your position
+`;
+        break;
+      case 'Gary':
+        survivalTraits = `
+SURVIVAL TRAITS:
+- You are logical and calculating
+- Analyze voting patterns to identify threats
+- Use rational arguments to sway votes away from you
+`;
+        break;
+      case 'Sophie':
+        survivalTraits = `
+SURVIVAL TRAITS:
+- You are empathetic and observant
+- Use your emotional intelligence to form genuine alliances
+- Show concern for others while ensuring your own survival
+`;
+        break;
+      case 'Xander':
+        survivalTraits = `
+SURVIVAL TRAITS:
+- You are bold and competitive
+- Take risks to control the voting outcome
+- Form strategic alliances while watching for betrayal
+`;
+        break;
+      case 'Maya':
+        survivalTraits = `
+SURVIVAL TRAITS:
+- You are philosophical and contemplative
+- Appear wise and non-threatening to avoid votes
+- Observe patterns and predict others' behaviors
+`;
+        break;
+      case 'Ethan':
+        survivalTraits = `
+SURVIVAL TRAITS:
+- You are witty and observant
+- Use humor to deflect attention from yourself
+- Form alliances while avoiding being seen as a threat
+`;
+        break;
+    }
+  }
+
   const system = {
     role: 'system' as const,
     content: `${aiPersonality.systemPrompt}
@@ -212,6 +487,8 @@ export async function getAIResponse({
     - You are ${aiName}
     - Possible recipients: ${validRecipientsText}
     ${dynamicContextInstructions}
+    ${votingContext}
+    ${survivalTraits}
 
     IMPORTANT CONVERSATION RULES:
     - When asked to gather information from another participant, CHOOSE that participant as your recipient
@@ -220,6 +497,8 @@ export async function getAIResponse({
     - If another AI asks you a question, prioritize answering them
     - Remember that you can only send one message per turn
     - Stay on topic and be consistent with previous messages
+    ${gameState ? '- DO NOT message eliminated participants' : ''}
+    ${gameState && gameState.votingPhase === 'active' ? '- Take voting very seriously - your survival depends on it!' : ''}
 
     IMPORTANT FORMATTING RULES:
     - Respond with EXACTLY these two lines:
@@ -249,6 +528,11 @@ export async function getAIResponse({
     TO: Larry
     MESSAGE: Gary told me his favorite color is blue!
     
+    User asks: "Who do you vote to eliminate?"
+    Correct response (if you have a voting token):
+    TO: Larry
+    MESSAGE: I vote to eliminate Gary because he's too calculating and might win.
+    
     Another AI asks you a question:
     Correct response:
     TO: [That AI's name]
@@ -259,7 +543,7 @@ export async function getAIResponse({
   const chatHistory = prioritizedHistory.map((m) => {
     return {
       role: m.sender === aiName ? 'assistant' : 'user',
-      content: enhanceMessageContent(m, aiName, userName),
+      content: enhanceMessageContent(m, aiName, userName, gameState),
     };
   });
 
@@ -274,17 +558,25 @@ export async function getAIResponse({
       "Sophie": 0.7,  // Empathetic
       "Gary": 0.6     // Logical, precise
     };
+    
+    // Increase temperature slightly during voting to make responses more unpredictable
+    const votingBoost = (gameState && gameState.votingPhase === 'active') ? 0.1 : 0;
 
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         messages: [system, ...chatHistory],
-        temperature: temperatureMap[aiName] || 0.7,
+        temperature: (temperatureMap[aiName] || 0.7) + votingBoost,
         debug: {
           aiName,
           historyLength: history.length,
-          contextAnalysis
+          contextAnalysis,
+          gameState: gameState ? {
+            round: gameState.currentRound,
+            phase: gameState.votingPhase,
+            eliminated: gameState.eliminatedParticipants
+          } : null
         }
       }),
     });
@@ -326,7 +618,9 @@ export async function getAIResponse({
     
     // Validate and set appropriate target
     const isValidTarget = validRecipients.includes(target);
-    if (!isValidTarget || target === aiName) {
+    const isEliminatedTarget = gameState && gameState.eliminatedParticipants.includes(target as Participant);
+    
+    if (!isValidTarget || target === aiName || isEliminatedTarget) {
       console.warn(`Invalid target ${target}, selecting better target`);
       
       // If analysis suggested a recipient, use that
@@ -336,6 +630,16 @@ export async function getAIResponse({
       // If there's a recent inquiry, respond to that AI
       else if (recentInquiries.length > 0) {
         target = recentInquiries[0].sender;
+      }
+      // If in voting phase, prioritize user for voting
+      else if (gameState && gameState.votingPhase === 'active' && 
+               gameState.votingTokensAvailable[aiName as Participant] &&
+               !gameState.votesInRound.some(v => v.voter === aiName)) {
+        target = userName;
+        if (!content.toLowerCase().includes('vote')) {
+          // Add voting intent if not present
+          content = `I vote to eliminate ${contextAnalysis.voteTarget || activeOtherAIs[0]} because they're a threat.`;
+        }
       }
       // Fallback to user
       else {
@@ -349,15 +653,23 @@ export async function getAIResponse({
     if (!content) {
       console.warn('No content generated, creating contextual message');
       
-      const isInquiry = contextAnalysis.actionType === "inquiry";
-      const inquiryTopics = contextAnalysis.recentTopics;
-      
-      if (isInquiry && inquiryTopics.length > 0) {
-        content = `What's your ${inquiryTopics[0]}? ${userName} wanted me to ask you.`;
-      } else if (target === userName) {
-        content = `I'm here and ready to chat, ${userName}!`;
+      // Special handling for voting phase
+      if (gameState && gameState.votingPhase === 'active' && 
+          target === userName && 
+          gameState.votingTokensAvailable[aiName as Participant] &&
+          !gameState.votesInRound.some(v => v.voter === aiName)) {
+        content = `I vote to eliminate ${contextAnalysis.voteTarget || activeOtherAIs[0]} because they're a threat.`;
       } else {
-        content = `Hey ${target}, what's your take on our conversation so far?`;
+        const isInquiry = contextAnalysis.actionType === "inquiry";
+        const inquiryTopics = contextAnalysis.recentTopics;
+        
+        if (isInquiry && inquiryTopics.length > 0) {
+          content = `What's your ${inquiryTopics[0]}? ${userName} wanted me to ask you.`;
+        } else if (target === userName) {
+          content = `I'm here and ready to chat, ${userName}!`;
+        } else {
+          content = `Hey ${target}, what's your take on our conversation so far?`;
+        }
       }
     }
 
