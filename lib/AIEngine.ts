@@ -618,14 +618,13 @@ SURVIVAL TRAITS:
     
   // In AIEngine.ts, in the getAIResponse function, modify the target validation logic:
 
-  // Validate and set appropriate target
   const isValidTarget = validRecipients.includes(target);
   const isEliminatedTarget = gameState && gameState.eliminatedParticipants.includes(target as Participant);
 
   if (!isValidTarget || target === aiName || isEliminatedTarget) {
     console.warn(`Invalid target ${target}, selecting better target`);
     
-    // Choose randomly among valid recipients instead of defaulting to user
+    // Get all valid recipients (not self, not eliminated)
     const availableRecipients = validRecipients.filter(r => 
       r !== aiName && 
       (!gameState || !gameState.eliminatedParticipants.includes(r as Participant))
@@ -649,45 +648,37 @@ SURVIVAL TRAITS:
         target = availableRecipients[Math.floor(Math.random() * availableRecipients.length)];
       }
     }
-    // If in voting phase, don't automatically target user
+    // If in voting phase, slightly increase probability of messaging other AIs for strategy
     else if (gameState && gameState.votingPhase === 'active' && 
             gameState.votingTokensAvailable[aiName as Participant] &&
             !gameState.votesInRound.some(v => v.voter === aiName)) {
-      // Target user 40% of the time, other AIs 60%
-      if (Math.random() < 0.4) {
-        target = userName;
-        if (!content.toLowerCase().includes('vote')) {
-          // Add voting intent if not present
-          content = `I vote to eliminate ${contextAnalysis.voteTarget || activeOtherAIs[0]} because they're a threat.`;
+      // 30% chance to message user, 70% chance to message other AIs for strategy
+      if (Math.random() < 0.7 && availableRecipients.filter(r => r !== userName).length > 0) {
+        // Pick a random AI to talk to
+        const otherAIs = availableRecipients.filter(r => r !== userName);
+        target = otherAIs[Math.floor(Math.random() * otherAIs.length)];
+        
+        // If no content, generate something about strategy
+        if (!content) {
+          content = `We should work together to eliminate ${contextAnalysis.voteTarget || userName}. What do you think?`;
         }
       } else {
-        // Pick a random AI to talk to
-        const otherAIs = activeOtherAIs.filter(ai => ai !== aiName);
-        if (otherAIs.length > 0) {
-          target = otherAIs[Math.floor(Math.random() * otherAIs.length)];
-          // If no content, generate something about strategy
-          if (!content) {
-            content = `We should work together to eliminate ${contextAnalysis.voteTarget || userName}. What do you think?`;
-          }
-        } else {
-          target = userName;
+        target = userName;
+        // Add voting intent if not present in voting phase
+        if (!content.toLowerCase().includes('vote')) {
+          content = `I vote to eliminate ${contextAnalysis.voteTarget || activeOtherAIs[0]} because they're a threat.`;
         }
       }
     }
-    // Random targeting in other cases
+    // Random targeting in other cases - GIVE EQUAL WEIGHT TO ALL RECIPIENTS
     else {
-      // 50% chance to message user, 50% to message another AI
-      if (availableRecipients.length > 1 && Math.random() < 0.5) {
-        const otherAIs = availableRecipients.filter(r => r !== userName);
-        target = otherAIs[Math.floor(Math.random() * otherAIs.length)];
-      } else {
-        target = userName;
-      }
+      // Just pick randomly from all available recipients
+      target = availableRecipients[Math.floor(Math.random() * availableRecipients.length)];
     }
     
     console.log(`Corrected target to: ${target}`);
   }
-    
+      
     // Ensure content exists
     if (!content) {
       console.warn('No content generated, creating contextual message');
