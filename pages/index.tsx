@@ -154,7 +154,12 @@ export default function Home() {
       return acc;
     }, {} as Record<Participant, number>);
     
-    gameState.votesInRound.forEach(vote => {
+    // Only count votes from the current round
+    const currentRoundVotes = gameState.votesInRound.filter(
+      vote => vote.round === gameState.currentRound
+    );
+    
+    currentRoundVotes.forEach(vote => {
       if (voteCounts[vote.votedFor] !== undefined) {
         voteCounts[vote.votedFor]++;
       }
@@ -163,6 +168,7 @@ export default function Home() {
     return voteCounts;
   };
   
+  // Process elimination based on votes
   // Process elimination based on votes
   const processElimination = useCallback(() => {
     if (gameState.eliminatedParticipants.length >= aiNames.length - 1) {
@@ -189,36 +195,40 @@ export default function Home() {
     const voteCounts = countVotes();
     console.log("Vote counts for elimination:", voteCounts);
     
-    // Find AI with lowest votes, excluding already eliminated
-    let lowestVotes = Infinity;
-    let lowestAI: Participant | null = null;
+    // Find AI with highest votes, excluding already eliminated
+    let highestVotes = -1;
+    let highestAI: Participant | null = null;
     
     Object.entries(voteCounts).forEach(([ai, count]) => {
       const participant = ai as Participant;
       if (
         !gameState.eliminatedParticipants.includes(participant) && 
-        count < lowestVotes
+        count > highestVotes
       ) {
-        lowestVotes = count;
-        lowestAI = participant;
+        highestVotes = count;
+        highestAI = participant;
       }
     });
     
-    if (lowestAI) {
+    // In case of a tie, you might want to handle this differently
+    // For now, this will just take the first AI with the highest votes
+    
+    if (highestAI && highestVotes > 0) {  // Only eliminate if they received at least 1 vote
       // Eliminate this AI
       setGameState(prev => ({
         ...prev,
-        eliminatedParticipants: [...prev.eliminatedParticipants, lowestAI as Participant],
+        eliminatedParticipants: [...prev.eliminatedParticipants, highestAI as Participant],
         votingPhase: 'idle',
         currentRound: prev.currentRound + 1,
-        votesInRound: []
+        votesInRound: [], // This clears all votes, ensuring they don't carry over
+        nextVotingTime: Date.now() + 120000 // 2 minutes until next voting round
       }));
       
       // Update chat state to mark as eliminated
       setChatStates(prev => ({
         ...prev,
-        [lowestAI]: {
-          ...prev[lowestAI],
+        [highestAI]: {
+          ...prev[highestAI],
           isEliminated: true
         }
       }));
@@ -229,7 +239,7 @@ export default function Home() {
         {
           sender: 'Larry',
           recipient: 'Larry',
-          content: `${lowestAI} has been eliminated from the game in round ${gameState.currentRound}!`,
+          content: `${highestAI} has been eliminated from the game in round ${gameState.currentRound} with ${highestVotes} votes!`,
           timestamp: Date.now(),
           visibility: 'highlighted'
         }
@@ -243,9 +253,28 @@ export default function Home() {
       
       setGameState(prev => ({
         ...prev,
-        votingTokensAvailable: resetVotingTokens,
-        nextVotingTime: Date.now() + 120000 // 2 minutes until next voting round
+        votingTokensAvailable: resetVotingTokens
       }));
+    } else {
+      // No votes or tied with zero votes, skip elimination
+      setGameState(prev => ({
+        ...prev,
+        votingPhase: 'idle',
+        currentRound: prev.currentRound + 1,
+        votesInRound: [], // Clear all votes
+        nextVotingTime: Date.now() + 120000
+      }));
+      
+      setMessages(prev => [
+        ...prev,
+        {
+          sender: 'Larry',
+          recipient: 'Larry',
+          content: `No one received any votes in round ${gameState.currentRound}. No elimination this round!`,
+          timestamp: Date.now(),
+          visibility: 'highlighted'
+        }
+      ]);
     }
   }, [gameState, aiNames]);
   
