@@ -26,16 +26,18 @@ export default function Home() {
     return s;
   });
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
+  // Only track tokens for AIs
   const [tokens, setTokens] = useState<Record<Participant, number>>(() => {
-    const t: Partial<Record<Participant, number>> = { Larry: 1 };
-    aiNames.forEach(n => { t[n as Participant] = 1; });
-    return t as Record<Participant, number>;
+    return aiNames.reduce((acc, ai) => {
+      acc[ai as Participant] = 1;
+      return acc;
+    }, {} as Record<Participant, number>);
   });
   const [turnTimer, setTurnTimer] = useState(30);
   const [isProcessing, setIsProcessing] = useState(false);
   const [turnInProgress, setTurnInProgress] = useState(false);
 
-  // — dynamic per-AI logging hook —
+  // — per‑AI logging hook —
   const lastLogTimes = useRef<Record<string, number>>(
     aiNames.reduce((acc, ai) => { acc[ai] = 0; return acc; }, {} as Record<string, number>)
   );
@@ -101,78 +103,76 @@ export default function Home() {
   );
 
   // — single AI turn —
-const processAIMessage = useCallback(
-      async (ai: Exclude<Participant,'Larry'>) => {
-        setIsProcessing(true);
-        try {
-      const history = messages
-        .filter(m => m.sender === ai || m.recipient === ai)
-        .slice(-20);
+  const processAIMessage = useCallback(
+    async (ai: Exclude<Participant,'Larry'>) => {
+      setIsProcessing(true);
+      try {
+        const history = messages
+          .filter(m => m.sender === ai || m.recipient === ai)
+          .slice(-20);
 
-      console.log(`Processing turn for ${ai}`, history);
+        console.log(`Processing turn for ${ai}`, history);
 
-      const { content, target } = await getAIResponse({
-        aiName: ai,
-        history,
-        userName: 'Larry'
-      });
+        const { content, target } = await getAIResponse({
+          aiName: ai,
+          history,
+          userName: 'Larry'
+        });
 
-      const finalTarget =
-        target === 'Larry' || (aiNames.includes(target) && target !== ai)
-          ? target
-          : 'Larry';
+        const finalTarget =
+          target === 'Larry' || (aiNames.includes(target) && target !== ai)
+            ? target
+            : 'Larry';
 
-      const newMsg: Message = {
-        sender:    ai,
-        recipient: finalTarget as Participant,
-        content:   content.trim(),
-        timestamp: Date.now(),
-        visibility: determineVisibility(ai, finalTarget as Participant, content)
-      };
+        const newMsg: Message = {
+          sender:    ai,
+          recipient: finalTarget as Participant,
+          content:   content.trim(),
+          timestamp: Date.now(),
+          visibility: determineVisibility(ai, finalTarget as Participant, content)
+        };
 
-      setMessages(prev => [...prev, newMsg]);
-      return true;
-     } catch {
-       return false;
-     } finally {
-       setIsProcessing(false);
-     }
-   },
-   [messages]
- );
+        setMessages(prev => [...prev, newMsg]);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    [aiNames, messages]
+  );
 
-  // — all AIs in random order —
+  // — all AIs in random order, spending exactly one token each —
   const processTurn = useCallback(
-      async () => {
-        if (turnInProgress) return;
-        setTurnInProgress(true);
-    
-        // Copy tokens so we can spend them immediately
-        const available = { ...tokens };
-        const order = [...aiNames].sort(() => Math.random() - 0.5);
-    
-        for (const ai of order) {
-          if (available[ai as Participant] > 0) {
-            available[ai as Participant]--;
-            await processAIMessage(ai as Exclude<Participant,'Larry'>);
-            await new Promise(r => setTimeout(r, 300));
-          }
-        }
-    
-        // Commit the spent tokens back to state in one go
-        setTokens(available);
-        setTurnInProgress(false);
-      },
-       [aiNames, tokens, processAIMessage, turnInProgress]
-     );
+    async () => {
+      if (turnInProgress) return;
+      setTurnInProgress(true);
 
-  // — send message helper —
+      const available = { ...tokens };
+      const order = [...aiNames].sort(() => Math.random() - 0.5);
+
+      for (const ai of order) {
+        if (available[ai as Participant] > 0) {
+          available[ai as Participant]--;
+          await processAIMessage(ai as Exclude<Participant,'Larry'>);
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
+
+      setTokens(available);
+      setTurnInProgress(false);
+    },
+    [aiNames, tokens, processAIMessage, turnInProgress]
+  );
+
+  // — send message helper (no user token gating) —
   const sendMessage = (
     sender: Participant,
     recipient: Participant,
     content: string
   ) => {
-    if (!content.trim() || tokens[sender] <= 0) return;
+    if (!content.trim()) return;
     const msg: Message = {
       sender,
       recipient,
@@ -181,20 +181,20 @@ const processAIMessage = useCallback(
       visibility: determineVisibility(sender, recipient, content)
     };
     setMessages(prev => [...prev, msg]);
-    setTokens(prev => ({ ...prev, [sender]: prev[sender] - 1 }));
+    // only decrement AI tokens elsewhere
   };
 
   // — trigger AI turn after Larry’s message —
+  const lastSender = messages[messages.length - 1]?.sender;
   useEffect(() => {
-    const last = messages[messages.length - 1];
-    if (last?.sender === 'Larry' && !turnInProgress) {
+    if (lastSender === 'Larry' && !turnInProgress) {
       processTurn();
     }
-  }, [messages, turnInProgress, processTurn]);
+  }, [lastSender, turnInProgress]);
 
   // — UI handlers —
   const sendToAI = (aiName: string) => {
-    if (tokens.Larry <= 0 || !chatStates[aiName].input.trim()) return;
+    if (!chatStates[aiName].input.trim()) return;
     sendMessage('Larry', aiName as Participant, chatStates[aiName].input);
     setChatStates(s => ({
       ...s,
@@ -228,11 +228,11 @@ const processAIMessage = useCallback(
   const handleInputChange = (aiName: string, v: string) =>
     setChatStates(s => ({ ...s, [aiName]: { ...s[aiName], input: v } }));
 
-  // — token refresh & timer —
+  // — token refresh & timer (for AIs only) —
   useEffect(() => {
     const iv1 = setInterval(() => {
       setTokens(prev => {
-        const next = { ...prev, Larry: prev.Larry + 1 };
+        const next = { ...prev };
         aiNames.forEach(ai => {
           next[ai as Participant] = prev[ai as Participant] + 1;
         });
@@ -247,9 +247,9 @@ const processAIMessage = useCallback(
       clearInterval(iv1);
       clearInterval(iv2);
     };
-  }, []);
+  }, [aiNames, processTurn]);
 
-  // — render —
+  // — render UI —
   return (
     <div className="min-h-screen bg-gray-100 p-6 space-y-6">
       {/* header */}
@@ -257,9 +257,9 @@ const processAIMessage = useCallback(
         <h1 className="text-xl font-bold mb-2">
           The Circle: AI Edition
         </h1>
-        ⏳ Next in: {turnTimer}s &nbsp;|&nbsp; 🎟 Tokens — Larry: {tokens.Larry}
+        ⏳ Next in: {turnTimer}s
         {aiNames.map(ai => (
-          <span key={ai}> | {ai}: {tokens[ai as Participant]}</span>
+          <span key={ai}> | {ai} tokens: {tokens[ai as Participant]}</span>
         ))}
       </div>
 
@@ -274,7 +274,7 @@ const processAIMessage = useCallback(
             input={chatStates[aiName].input}
             onInputChange={v => handleInputChange(aiName, v)}
             onSend={() => sendToAI(aiName)}
-            canSend={tokens.Larry > 0}
+            canSend={true}
             personality={
               AI_PERSONALITIES.find(a => a.name === aiName)
                 ?.shortDescription
@@ -320,9 +320,7 @@ const processAIMessage = useCallback(
           <h3 className="text-sm font-bold mb-2">Debug Panel</h3>
           <div className="text-xs">
             <div>Expanded Chat: {expandedChat || 'None'}</div>
-            <div>
-              Turn In Progress: {turnInProgress ? 'Yes' : 'No'}
-            </div>
+            <div>Turn In Progress: {turnInProgress ? 'Yes' : 'No'}</div>
             <div>Processing: {isProcessing ? 'Yes' : 'No'}</div>
           </div>
         </div>
