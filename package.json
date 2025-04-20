@@ -1,5 +1,5 @@
 {
-  "name": "dual-ai-chat-game",
+  "name": "ai-debate-app",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -8,16 +8,14 @@
     "start": "next start"
   },
   "dependencies": {
-    "autoprefixer": "^10.4.0",
-    "next": "13.4.7",
-    "openai": "^4.95.1",
-    "postcss": "^8.4.5",
+    "next": "14.2.1",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "tailwindcss": "^3.2.0"
+    "openai": "^4.41.0"
   },
   "devDependencies": {
-    "@types/react": "19.1.2",
-    "typescript": "5.8.3"
+    "@types/node": "20.11.19",
+    "@types/react": "18.2.55",
+    "typescript": "5.4.2"
   }
 }
