@@ -47,8 +47,7 @@ export default async function handler(
       content: `
 You are a participant in "The Circle" style voting competition.
 - You are ${currentAI}.
-- The other participants are: ${otherAIs.join(', ')}.
-- The human user is ${userName}.
+- The other participants are: ${otherAIs.join(', ')}, ${userName}.
 - One message per turn; you cannot message yourself.
 
 ${debug?.gameState?.eliminated?.length > 0 ? 
@@ -59,7 +58,7 @@ FORMAT your reply **exactly** as:
 TO: <recipient>
 MESSAGE: <your text>
 
-Recipient must be "${userName}" or one of: ${activeOtherAIs.join(', ')}.
+Recipient must be one of: ${activeOtherAIs.join(', ')}, ${userName}.
       `.trim()
     };
 

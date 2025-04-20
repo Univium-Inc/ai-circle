@@ -525,12 +525,12 @@ SURVIVAL TRAITS:
     
     User asks: "What did Gary say his favorite color was?"
     Correct response (if Gary previously told you):
-    TO: Larry
+    TO: Benny
     MESSAGE: Gary told me his favorite color is blue!
     
     User asks: "Who do you vote to eliminate?"
     Correct response (if you have a voting token):
-    TO: Larry
+    TO: Benny
     MESSAGE: I vote to eliminate Gary because he's too calculating and might win.
     
     Another AI asks you a question:
