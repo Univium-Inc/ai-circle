@@ -101,7 +101,8 @@ export default function Home() {
   );
 
   // — single AI turn —
-  const processAIMessage = async (ai: Exclude<Participant,'Larry'>) => {
+  const processAIMessage = useCallback(
+    async (ai: Exclude<Participant,'Larry'>) => {
     if (tokens[ai] <= 0) return false;
     setIsProcessing(true);
     try {
@@ -138,10 +139,13 @@ export default function Home() {
     } finally {
       setIsProcessing(false);
     }
-  };
+    },
+    [messages, tokens] // <-- now `history` will always see the latest `messages`
+  );
 
   // — all AIs in random order —
-  const processTurn = async () => {
+  const processTurn = useCallback(
+    async () => {
     if (turnInProgress) return;
     setTurnInProgress(true);
 
@@ -154,7 +158,9 @@ export default function Home() {
     }
 
     setTurnInProgress(false);
-  };
+  },
+  [aiNames, tokens, processAIMessage, turnInProgress]
+);
 
   // — send message helper —
   const sendMessage = (
@@ -180,7 +186,7 @@ export default function Home() {
     if (last?.sender === 'Larry' && !turnInProgress) {
       processTurn();
     }
-  }, [messages, turnInProgress]);
+  }, [messages, turnInProgress, processTurn]);
 
   // — UI handlers —
   const sendToAI = (aiName: string) => {
