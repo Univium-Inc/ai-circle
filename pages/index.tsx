@@ -12,6 +12,12 @@ import { CollapsibleChat } from '@/components/CollapsibleChat';
 
 export default function Home() {
   const aiNames = getAllAINames();
+  
+  // Reference for interval IDs to ensure proper cleanup
+  const intervalRefs = useRef<{tokenTimer: NodeJS.Timeout | null, countdownTimer: NodeJS.Timeout | null}>({
+    tokenTimer: null,
+    countdownTimer: null
+  });
 
   // — state hooks —
   const [messages, setMessages] = useState<Message[]>([]);
@@ -36,11 +42,15 @@ export default function Home() {
   const [turnTimer, setTurnTimer] = useState(30);
   const [isProcessing, setIsProcessing] = useState(false);
   const [turnInProgress, setTurnInProgress] = useState(false);
+  
+  // State to track when a token refresh should happen
+  const [shouldRefreshTokens, setShouldRefreshTokens] = useState(false);
 
   // — per‑AI logging hook —
   const lastLogTimes = useRef<Record<string, number>>(
     aiNames.reduce((acc, ai) => { acc[ai] = 0; return acc; }, {} as Record<string, number>)
   );
+  
   useEffect(() => {
     const logAllAIs = () => {
       const now = Date.now();
@@ -125,16 +135,17 @@ export default function Home() {
             : 'Larry';
 
         const newMsg: Message = {
-          sender:    ai,
+          sender: ai,
           recipient: finalTarget as Participant,
-          content:   content.trim(),
+          content: content.trim(),
           timestamp: Date.now(),
           visibility: determineVisibility(ai, finalTarget as Participant, content)
         };
 
         setMessages(prev => [...prev, newMsg]);
         return true;
-      } catch {
+      } catch (error) {
+        console.error(`Error processing message for ${ai}:`, error);
         return false;
       } finally {
         setIsProcessing(false);
@@ -146,24 +157,37 @@ export default function Home() {
   // — all AIs in random order, spending exactly one token each —
   const processTurn = useCallback(
     async () => {
-      if (turnInProgress) return;
+      if (turnInProgress) {
+        console.log("Turn already in progress, skipping");
+        return;
+      }
+      
+      console.log("Starting new turn with tokens:", tokens);
       setTurnInProgress(true);
 
-      const available = { ...tokens };
-      const order = [...aiNames].sort(() => Math.random() - 0.5);
+      try {
+        const available = { ...tokens };
+        const order = [...aiNames].sort(() => Math.random() - 0.5);
 
-      for (const ai of order) {
-        if (available[ai as Participant] > 0) {
-          available[ai as Participant]--;
-          await processAIMessage(ai as Exclude<Participant,'Larry'>);
-          await new Promise(r => setTimeout(r, 300));
+        for (const ai of order) {
+          if (available[ai as Participant] > 0) {
+            available[ai as Participant]--;
+            console.log(`${ai} spending token, ${available[ai as Participant]} remaining`);
+            await processAIMessage(ai as Exclude<Participant,'Larry'>);
+            await new Promise(r => setTimeout(r, 300));
+          } else {
+            console.log(`${ai} has no tokens to spend`);
+          }
         }
-      }
 
-      setTokens(available);
-      setTurnInProgress(false);
+        setTokens(available);
+      } catch (error) {
+        console.error("Error in processTurn:", error);
+      } finally {
+        setTurnInProgress(false);
+      }
     },
-    [aiNames, tokens, processAIMessage, turnInProgress]
+    [aiNames, tokens, processAIMessage]
   );
 
   // — send message helper (no user token gating) —
@@ -184,13 +208,13 @@ export default function Home() {
     // only decrement AI tokens elsewhere
   };
 
-  // — trigger AI turn after Larry’s message —
+  // — trigger AI turn after Larry's message —
   const lastSender = messages[messages.length - 1]?.sender;
   useEffect(() => {
     if (lastSender === 'Larry' && !turnInProgress) {
       processTurn();
     }
-  }, [lastSender, turnInProgress]);
+  }, [lastSender, processTurn, turnInProgress]);
 
   // — UI handlers —
   const sendToAI = (aiName: string) => {
@@ -228,26 +252,86 @@ export default function Home() {
   const handleInputChange = (aiName: string, v: string) =>
     setChatStates(s => ({ ...s, [aiName]: { ...s[aiName], input: v } }));
 
-  // — token refresh & timer (for AIs only) —
+  // Timer countdown effect - Uses ref to prevent recreation
   useEffect(() => {
-    const iv1 = setInterval(() => {
+    // Clear any existing interval
+    if (intervalRefs.current.countdownTimer) {
+      clearInterval(intervalRefs.current.countdownTimer);
+    }
+    
+    // Setup countdown timer
+    const countdownInterval = setInterval(() => {
+      setTurnTimer(prev => {
+        const newValue = Math.max(0, prev - 1);
+        // When timer hits zero, trigger token refresh
+        if (newValue === 0) {
+          setShouldRefreshTokens(true);
+        }
+        return newValue;
+      });
+    }, 1000);
+    
+    // Store reference for cleanup
+    intervalRefs.current.countdownTimer = countdownInterval;
+    
+    return () => {
+      if (intervalRefs.current.countdownTimer) {
+        clearInterval(intervalRefs.current.countdownTimer);
+        intervalRefs.current.countdownTimer = null;
+      }
+    };
+  }, []); // No dependencies to prevent recreation
+
+  // Token refresh effect - Triggered when timer hits zero
+  useEffect(() => {
+    if (shouldRefreshTokens) {
+      console.log("Refreshing tokens and resetting timer");
+      
+      // Reset tokens
       setTokens(prev => {
         const next = { ...prev };
         aiNames.forEach(ai => {
-          next[ai as Participant] = prev[ai as Participant] + 1;
+          next[ai as Participant] = Math.min(prev[ai as Participant] + 1, 3);
         });
         return next;
       });
+      
+      // Reset timer
       setTurnTimer(30);
-      setTimeout(processTurn, 500);
-    }, 30_000);
+      
+      // Reset flag
+      setShouldRefreshTokens(false);
+      
+      // Process turn with new tokens
+      if (!turnInProgress) {
+        setTimeout(() => {
+          processTurn();
+        }, 500);
+      }
+    }
+  }, [shouldRefreshTokens, aiNames, processTurn, turnInProgress]);
 
-    const iv2 = setInterval(() => setTurnTimer(t => Math.max(0, t - 1)), 1_000);
+  // Initial setup of token refresh timer
+  useEffect(() => {
+    // Clear any existing interval
+    if (intervalRefs.current.tokenTimer) {
+      clearInterval(intervalRefs.current.tokenTimer);
+    }
+    
+    // Create backup timer for token refresh in case the countdown timer fails
+    const tokenInterval = setInterval(() => {
+      setShouldRefreshTokens(true);
+    }, 30000);
+    
+    intervalRefs.current.tokenTimer = tokenInterval;
+    
     return () => {
-      clearInterval(iv1);
-      clearInterval(iv2);
+      if (intervalRefs.current.tokenTimer) {
+        clearInterval(intervalRefs.current.tokenTimer);
+        intervalRefs.current.tokenTimer = null;
+      }
     };
-  }, [aiNames, processTurn]);
+  }, []); // Empty dependency array to run only once
 
   // — render UI —
   return (
@@ -322,6 +406,8 @@ export default function Home() {
             <div>Expanded Chat: {expandedChat || 'None'}</div>
             <div>Turn In Progress: {turnInProgress ? 'Yes' : 'No'}</div>
             <div>Processing: {isProcessing ? 'Yes' : 'No'}</div>
+            <div>Turn Timer: {turnTimer}s</div>
+            <div>Should Refresh Tokens: {shouldRefreshTokens ? 'Yes' : 'No'}</div>
           </div>
         </div>
       )}
