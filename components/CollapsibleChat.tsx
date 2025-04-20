@@ -16,6 +16,7 @@ type CollapsibleChatProps = {
   isExpanded: boolean;
   onToggleExpand: () => void;
   unreadCount: number;
+  eliminated?: boolean;
 };
 
 export const CollapsibleChat = ({
