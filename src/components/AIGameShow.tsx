@@ -236,37 +236,39 @@ const AIGameShow: React.FC = () => {
     // Handle voting phase - each AI votes in turn
     if (gamePhase === 'voting') {
       clearAllTimers();
-      
-      console.log("Setting up voting sequence");
+    
+      console.log('Setting up voting sequence');
       console.log(`Starting voting phase with ${messagesRef.current.length} messages`);
-      
-      // Set up sequential voting (with some delay between each)
+    
       const activeAis = ais.filter(ai => !ai.eliminated);
-      
       if (activeAis.length === 0) {
-        console.log("No active AIs to vote");
+        console.log('No active AIs to vote');
         return;
       }
-      
-      console.log(`${activeAis.length} AIs will vote:`, activeAis.map(ai => ai.name).join(", "));
-      
-      // Clear any existing votes
-      setAis(prev => prev.map(ai => ({...ai, votes: 0})));
-      
-      // Set up voting sequence with a staggered schedule
-      let voteDelay = 1000; // Start first vote after 1 second
-      
-      activeAis.forEach((ai) => {
-        const voteTimer = setTimeout(() => {
-          console.log(`Triggering vote for ${ai.name}`);
-          aiVote(ai.name);
-        }, voteDelay);
-        
-        // Add to cleanup
-        return () => clearTimeout(voteTimer);
-        
-        voteDelay += 5000; // 5 seconds between votes
+    
+      console.log(
+        `${activeAis.length} AIs will vote:`,
+        activeAis.map(ai => ai.name).join(', ')
+      );
+    
+      // reset vote counts
+      setAis(prev => prev.map(ai => ({ ...ai, votes: 0 })));
+    
+      // ---- scheduling ----
+      const voteTimers: NodeJS.Timeout[] = [];
+      let voteDelay = 1000;              // first vote after 1 s
+      activeAis.forEach(ai => {
+        voteTimers.push(
+          setTimeout(() => {
+            console.log(`Triggering vote for ${ai.name}`);
+            aiVote(ai.name);
+          }, voteDelay)
+        );
+        voteDelay += 5000;               // 5 s between votes
       });
+    
+      // proper cleanup: clear all those timeouts if we leave the voting phase
+      return () => voteTimers.forEach(clearTimeout);
     }
     
     return () => {
