@@ -241,7 +241,7 @@ IMPORTANT:
 - Don't announce that it's your turn to speak.`;
 
       // Get more conversation history than before
-      const recentMessages = messages.slice(0, CONFIG.MAX_HISTORY_MESSAGES);
+      const recentMessages = [...messages.slice(0, CONFIG.MAX_HISTORY_MESSAGES)].reverse();
       const formattedHistory = formatConversationHistory(recentMessages);
       
       // Add the current prompt at the end
