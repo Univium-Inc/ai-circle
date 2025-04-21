@@ -274,7 +274,7 @@ const AIGameShow: React.FC = () => {
     return () => {
       clearAllTimers();
     };
-  }, [gamePhase, ais]);
+  }, [gamePhase]);
 
   // AI character speaks during chat phase
   const aiSpeak = async (speaker: string) => {
