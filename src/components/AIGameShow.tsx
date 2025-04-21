@@ -35,6 +35,8 @@ const CONFIG = {
   MAX_HISTORY_MESSAGES: 20 // Increased from 10 to provide more context
 };
 
+const votesScheduled = useRef(false);
+
 const AIGameShow: React.FC = () => {
   // Game state
   const [gamePhase, setGamePhase] = useState<GamePhase>('setup');
@@ -235,6 +237,9 @@ const AIGameShow: React.FC = () => {
     
     // Handle voting phase - each AI votes in turn
     if (gamePhase === 'voting') {
+      if (votesScheduled.current) return;
+      votesScheduled.current = true;
+
       clearAllTimers();
     
       console.log('Setting up voting sequence');
@@ -268,7 +273,10 @@ const AIGameShow: React.FC = () => {
       });
     
       // proper cleanup: clear all those timeouts if we leave the voting phase
-      return () => voteTimers.forEach(clearTimeout);
+      return () => {
+        voteTimers.forEach(clearTimeout);
+        votesScheduled.current = false;   // reset for next round
+      };
     }
     
     return () => {
