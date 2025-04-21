@@ -82,9 +82,10 @@ const AIGameShow: React.FC = () => {
     }
   }, [messages]);
 
-  // Timer effect
   useEffect(() => {
     if (gamePhase !== 'chat' && gamePhase !== 'voting') return;
+    
+    console.log(`Timer running: ${gamePhase} phase, ${timeRemaining} seconds remaining`);
     
     if (timeRemaining > 0) {
       phaseTimer.current = setTimeout(() => {
@@ -95,15 +96,29 @@ const AIGameShow: React.FC = () => {
         if (phaseTimer.current) clearTimeout(phaseTimer.current);
       };
     } else {
+      console.log(`Timer reached zero in ${gamePhase} phase`);
+      
       // When timer reaches 0, switch to next phase
       if (gamePhase === 'chat') {
-        setGamePhase('voting');
-        setTimeRemaining(CONFIG.VOTING_SECONDS);
+        console.log("Chat phase ended, switching to voting phase");
+        
+        // Clear any ongoing conversation timers
+        if (turnTimer.current) clearInterval(turnTimer.current);
+        if (hostTimer.current) clearInterval(hostTimer.current);
         
         // Announce voting phase
         hostSpeak("Time's up! Voting has begun! Each AI must now vote for who to eliminate.");
+        
+        // Important: Set a short delay before changing phase to ensure
+        // the host message is processed first
+        setTimeout(() => {
+          setGamePhase('voting');
+          setTimeRemaining(CONFIG.VOTING_SECONDS);
+          console.log("Voting phase started with timer set to", CONFIG.VOTING_SECONDS);
+        }, 1000);
+        
       } else if (gamePhase === 'voting') {
-        // Process votes
+        console.log("Voting phase ended, switching to results phase");
         setGamePhase('results');
       }
     }
@@ -223,16 +238,33 @@ const AIGameShow: React.FC = () => {
     if (gamePhase === 'voting') {
       clearAllTimers();
       
+      console.log("Setting up voting sequence");
       console.log(`Starting voting phase with ${messagesRef.current.length} messages`);
       
       // Set up sequential voting (with some delay between each)
       const activeAis = ais.filter(ai => !ai.eliminated);
-      let voteDelay = 0;
+      
+      if (activeAis.length === 0) {
+        console.log("No active AIs to vote");
+        return;
+      }
+      
+      console.log(`${activeAis.length} AIs will vote:`, activeAis.map(ai => ai.name).join(", "));
+      
+      // Clear any existing votes
+      setAis(prev => prev.map(ai => ({...ai, votes: 0})));
+      
+      // Set up voting sequence with a staggered schedule
+      let voteDelay = 1000; // Start first vote after 1 second
       
       activeAis.forEach((ai) => {
-        setTimeout(() => {
+        const voteTimer = setTimeout(() => {
+          console.log(`Triggering vote for ${ai.name}`);
           aiVote(ai.name);
         }, voteDelay);
+        
+        // Add to cleanup
+        return () => clearTimeout(voteTimer);
         
         voteDelay += 5000; // 5 seconds between votes
       });
