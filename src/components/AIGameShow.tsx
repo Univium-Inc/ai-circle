@@ -200,12 +200,16 @@ const AIGameShow: React.FC = () => {
   };
 
   // Process conversation history into a format appropriate for the API
-  const formatConversationHistory = (messageHistory: Message[]) => {
-    return messageHistory.map(msg => ({
-      role: msg.sender === hostName ? "system" : "user",
-      content: `${msg.sender}: ${msg.content}`
-    }));
-  };
+  const formatConversationHistory = (
+    history: Message[],
+    currentSpeaker: string
+  ) => history.map(m => ({
+    role:
+      m.sender === currentSpeaker ? "assistant" :
+      m.sender === hostName       ? "system"    :
+                                    "user",
+    content: `${m.sender}: ${m.content}`
+  }));
 
   // AI character speaks during chat phase
   const aiSpeak = async (speaker: string) => {
@@ -242,7 +246,7 @@ IMPORTANT:
 
       // Get more conversation history than before
       const recentMessages = [...messages.slice(0, CONFIG.MAX_HISTORY_MESSAGES)].reverse();
-      const formattedHistory = formatConversationHistory(recentMessages);
+      const formattedHistory = formatConversationHistory(recentMessages, speaker);
       
       // Add the current prompt at the end
       const chatMessages = [
