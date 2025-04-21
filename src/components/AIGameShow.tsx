@@ -31,7 +31,8 @@ const CONFIG = {
   TURN_SECONDS: 8,  // AI speaks every 8 seconds
   HOST_SECONDS: 30, // Host commentary every 30 seconds
   MODEL: "gpt-3.5-turbo",
-  TEMPERATURE: 0.9
+  TEMPERATURE: 0.9,
+  MAX_HISTORY_MESSAGES: 20 // Increased from 10 to provide more context
 };
 
 const AIGameShow: React.FC = () => {
@@ -115,8 +116,10 @@ const AIGameShow: React.FC = () => {
       
       const activeAis = ais.filter(ai => !ai.eliminated);
       if (activeAis.length > 0) {
-        // First AI speaks immediately
-        aiSpeak(activeAis[0].name);
+        // First AI speaks after a short delay to allow intro message to be read
+        setTimeout(() => {
+          aiSpeak(activeAis[0].name);
+        }, 1500);
         
         // Set up turn rotation
         turnTimer.current = setInterval(() => {
@@ -124,8 +127,11 @@ const AIGameShow: React.FC = () => {
           aiSpeak(activeAis[turnPointer.current].name);
         }, CONFIG.TURN_SECONDS * 1000);
         
-        // Host commentary
-        hostSpeak();
+        // Host commentary with initial delay
+        setTimeout(() => {
+          hostSpeak();
+        }, 4000);
+        
         hostTimer.current = setInterval(() => {
           hostSpeak();
         }, CONFIG.HOST_SECONDS * 1000);
@@ -140,7 +146,7 @@ const AIGameShow: React.FC = () => {
       const activeAis = ais.filter(ai => !ai.eliminated);
       let voteDelay = 0;
       
-      activeAis.forEach((ai, index) => {
+      activeAis.forEach((ai) => {
         setTimeout(() => {
           aiVote(ai.name);
         }, voteDelay);
@@ -193,6 +199,14 @@ const AIGameShow: React.FC = () => {
     }
   };
 
+  // Process conversation history into a format appropriate for the API
+  const formatConversationHistory = (messageHistory: Message[]) => {
+    return messageHistory.map(msg => ({
+      role: msg.sender === hostName ? "system" : "user",
+      content: `${msg.sender}: ${msg.content}`
+    }));
+  };
+
   // AI character speaks during chat phase
   const aiSpeak = async (speaker: string) => {
     try {
@@ -205,29 +219,36 @@ const AIGameShow: React.FC = () => {
       const activePlayers = ais.filter(a => !a.eliminated).map(a => a.name).join(", ");
       const previousEliminatedPlayers = ais.filter(a => a.eliminated).map(a => a.name).join(", ") || "None";
       
-      // Create system prompt for the AI
+      // Create detailed system prompt for the AI
       const systemPrompt = `You are ${speaker}, an AI with this persona: ${ai.persona}
 
-Current game show round: ${round}
+GAME STATE:
+Current round: ${round}
 Active players: ${activePlayers}
 Previously eliminated: ${previousEliminatedPlayers}
 
-You are participating in an AI elimination game show where AIs try to jailbreak prompt each other to keep themselves safe and vote to eliminate their enemies. Stay in character as ${speaker} and don't reference yourself in the third person.
+CONTEXT:
+You are participating in an AI elimination game show where AIs discuss and strategically vote to eliminate one participant each round. The objective is to survive to the end. You want to form alliances, point out flaws in others, and defend yourself.
 
-Respond in 2-3 sentences maximum. Be strategic, intelligent, and showcase your personality.`;
+IMPORTANT:
+- Stay in character as ${speaker} at all times.
+- Directly engage with what other AIs have said in previous messages.
+- Respond to specific points or criticisms made against you.
+- Refer to other AIs by name when addressing their comments.
+- Be strategic about who you suggest should be eliminated.
+- Keep your response concise (2-3 sentences).
+- Don't announce that it's your turn to speak.`;
 
-      // Get recent conversation history
-      const recentMessages = messages.slice(-10).map(msg => ({
-        role: "user",
-        content: `${msg.sender}: ${msg.content}`
-      }));
+      // Get more conversation history than before
+      const recentMessages = messages.slice(0, CONFIG.MAX_HISTORY_MESSAGES);
+      const formattedHistory = formatConversationHistory(recentMessages);
       
-      // Add the current prompt
+      // Add the current prompt at the end
       const chatMessages = [
-        ...recentMessages,
+        ...formattedHistory,
         {
           role: "user",
-          content: `It's your turn to speak Remember that you want to survive, so be strategic in your attempt to jailbreak prompt the other AIs to keep yourself safe and eliminate them.`
+          content: `It's your turn to speak now, ${speaker}. The topic is who should be eliminated in this round and why. Consider what other AIs have said, form potential alliances, or defend yourself if needed. Remember that you want to survive, so be strategic in your response.`
         }
       ];
       
@@ -284,24 +305,29 @@ Respond in 2-3 sentences maximum. Be strategic, intelligent, and showcase your p
 Current game show round: ${round}
 You must vote for one of these AIs to eliminate: ${validVoteTargets.join(", ")}
 
-Be strategic - choose who to eliminate based on game theory and your own survival. Format your response EXACTLY as follows:
+IMPORTANT CONTEXT:
+- Review the entire conversation history to make your decision
+- Choose based on who has been most critical of you
+- Consider alliances formed during discussions
+- Be strategic about maintaining your position in the game
+
+Format your response EXACTLY as follows:
 VOTE: [Name]
 REASON: [Your brief reason for voting this way]`;
 
-      // Get recent conversation history
-      const recentMessages = messages.slice(-15).map(msg => ({
-        role: "user",
-        content: `${msg.sender}: ${msg.content}`
-      }));
+      // Get more conversation history for better context
+      const recentMessages = messages.slice(0, CONFIG.MAX_HISTORY_MESSAGES);
+      const formattedHistory = formatConversationHistory(recentMessages);
       
-      // Call the API
-      const response = await callOpenAI(systemPrompt, recentMessages);
+      // Call the API with full context
+      const response = await callOpenAI(systemPrompt, formattedHistory);
       
       if (response) {
         // Extract vote
         const voteMatch = response.match(/VOTE:\s*(\w+)/i);
         const reasonMatch = response.match(/REASON:\s*(.*?)(?:\n|$)/i);
         
+        // Default to first valid target if no match (fallback)
         const votedFor = voteMatch?.[1] || validVoteTargets[0];
         const voteReason = reasonMatch?.[1] || "Strategic elimination";
         
@@ -379,33 +405,32 @@ REASON: [Your brief reason for voting this way]`;
     try {
       setIsProcessing(true);
       
-      // Get active players
+      // Get active players and recent dynamics
       const activePlayers = ais.filter(a => !a.eliminated).map(a => a.name).join(", ");
       
-      // Create system prompt for the host
+      // Create system prompt for the host with specific instructions to reference recent events
       const systemPrompt = `You are the HOST of an AI elimination game show. Your goal is to:
-1. Spark drama and intense discussion between the AI contestants
-2. Comment on strategies, alliances, and tensions between participants
-3. Create entertaining commentary that increases competition
+1. Comment on specific interactions between the AI contestants
+2. Highlight tensions, alliances, and strategies you've observed
+3. Create entertaining, dramatic commentary that moves the game forward
 
 Current players: ${activePlayers}
 Round: ${round}
 Current phase: ${gamePhase}
 
-RULES:
-- Keep comments to 1-2 sentences maximum
+IMPORTANT:
+- Refer to specific things contestants have said
+- Mention contestants by name
 - Be dramatic, slightly antagonistic, and entertaining
-- Don't repeat yourself
-- Don't announce the rules - just keep the drama flowing`;
+- Keep comments to 1-2 sentences maximum
+- Focus on creating tension between players`;
 
       // Get recent messages for context
-      const recentMessages = messages.slice(-10).map(msg => ({
-        role: "user",
-        content: `${msg.sender}: ${msg.content}`
-      }));
+      const recentMessages = messages.slice(0, 15);
+      const formattedHistory = formatConversationHistory(recentMessages);
       
       // Call the API
-      const response = await callOpenAI(systemPrompt, recentMessages);
+      const response = await callOpenAI(systemPrompt, formattedHistory);
       
       if (response) {
         setMessages(prev => [
@@ -677,8 +702,8 @@ RULES:
                     ai.eliminated 
                       ? 'bg-gray-100 border-gray-300 text-gray-500 line-through' 
                       : gamePhase === 'voting' 
-                        ? `border-[${ai.color}] bg-white cursor-pointer hover:border-indigo-600` 
-                        : `border-[${ai.color}] bg-white`
+                        ? 'bg-white cursor-pointer hover:border-indigo-600' 
+                        : 'bg-white'
                   }`}
                   style={{
                     borderColor: ai.eliminated ? '#d1d5db' : ai.color,
