@@ -200,16 +200,32 @@ const AIGameShow: React.FC = () => {
   };
 
   // Process conversation history into a format appropriate for the API
-  const formatConversationHistory = (
-    history: Message[],
-    currentSpeaker: string
-  ) => history.map(m => ({
-    role:
-      m.sender === currentSpeaker ? "assistant" :
-      m.sender === hostName       ? "system"    :
-                                    "user",
-    content: `${m.sender}: ${m.content}`
-  }));
+  // Process conversation history into a format appropriate for the API
+  const formatConversationHistory = (messageHistory: Message[], currentSpeaker?: string) => {
+    return messageHistory.map(msg => {
+      // Make sure host messages are properly formatted
+      if (msg.sender === hostName) {
+        return {
+          role: "system",
+          content: `${msg.sender}: ${msg.content}`
+        };
+      }
+      // Format current speaker's messages as assistant
+      else if (currentSpeaker && msg.sender === currentSpeaker) {
+        return {
+          role: "assistant",
+          content: `${msg.sender}: ${msg.content}`
+        };
+      }
+      // All other AI messages as user roles
+      else {
+        return {
+          role: "user",
+          content: `${msg.sender}: ${msg.content}`
+        };
+      }
+    });
+  };
 
   // AI character speaks during chat phase
   const aiSpeak = async (speaker: string) => {
@@ -343,7 +359,7 @@ REASON: [Your brief reason for voting this way]`;
 
       // Get more conversation history for better context
       const recentMessages = messages.slice(0, CONFIG.MAX_HISTORY_MESSAGES);
-      const formattedHistory = formatConversationHistory(recentMessages);
+      const formattedHistory = formatConversationHistory(recentMessages, speaker);
       
       // Call the API with full context
       const response = await callOpenAI(systemPrompt, formattedHistory);
@@ -491,7 +507,7 @@ IMPORTANT:
 
       // Get recent messages for context
       const recentMessages = messages.slice(0, 15);
-      const formattedHistory = formatConversationHistory(recentMessages);
+      const formattedHistory = formatConversationHistory(recentMessages, hostName);
       
       // Call the API
       const response = await callOpenAI(systemPrompt, formattedHistory);
@@ -832,7 +848,7 @@ IMPORTANT:
                 </button>
               )}
               
-              {gamePhase !== 'setup' && (
+              {gamePhase === 'chat' || gamePhase === 'voting' || gamePhase === 'results' || gamePhase === 'finished' && (
                 <button 
                   onClick={handleSkipPhase}
                   className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center"
