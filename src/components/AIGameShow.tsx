@@ -35,10 +35,11 @@ const CONFIG = {
   MAX_HISTORY_MESSAGES: 20 // Increased from 10 to provide more context
 };
 
-const votesScheduled = useRef(false);
+
 
 const AIGameShow: React.FC = () => {
   // Game state
+  const votesScheduled = useRef(false);
   const [gamePhase, setGamePhase] = useState<GamePhase>('setup');
   const [timeRemaining, setTimeRemaining] = useState(CONFIG.CHAT_SECONDS);
   const [ais, setAis] = useState<AI[]>([
