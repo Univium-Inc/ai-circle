@@ -57,31 +57,17 @@ const AIGameShow: React.FC = () => {
   const phaseTimer = useRef<NodeJS.Timeout | null>(null);
   const turnTimer = useRef<NodeJS.Timeout | null>(null);
   const hostTimer = useRef<NodeJS.Timeout | null>(null);
-  const votingTimers = useRef<NodeJS.Timeout[]>([]);
   const turnPointer = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // Message store ref to ensure consistent access to latest messages
   const messagesRef = useRef<Message[]>([]);
-  const gameStateRef = useRef<{ phase: GamePhase, round: number }>({ phase: 'setup', round: 1 });
   
-  // Track if component is mounted
-  const isMounted = useRef(true);
-  
-  // Update refs when state changes
+  // Update messagesRef whenever messages state changes
   useEffect(() => {
     messagesRef.current = messages;
+    console.log(`Messages updated, count: ${messages.length}`);
   }, [messages]);
-  
-  useEffect(() => {
-    gameStateRef.current = { phase: gamePhase, round };
-  }, [gamePhase, round]);
-  
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      isMounted.current = false;
-      clearAllTimers();
-    };
-  }, []);
 
   // Check if API key exists
   useEffect(() => {
@@ -96,178 +82,52 @@ const AIGameShow: React.FC = () => {
     }
   }, [messages]);
 
-  // Clear all timers helper function
-  const clearAllTimers = () => {
-    if (phaseTimer.current) {
-      clearTimeout(phaseTimer.current);
-      phaseTimer.current = null;
-    }
-    
-    if (turnTimer.current) {
-      clearInterval(turnTimer.current);
-      turnTimer.current = null;
-    }
-    
-    if (hostTimer.current) {
-      clearInterval(hostTimer.current);
-      hostTimer.current = null;
-    }
-    
-    // Clear all voting timers
-    votingTimers.current.forEach(timer => clearTimeout(timer));
-    votingTimers.current = [];
-  };
-
-  // Timer effect
   useEffect(() => {
     if (gamePhase !== 'chat' && gamePhase !== 'voting') return;
     
+    console.log(`Timer running: ${gamePhase} phase, ${timeRemaining} seconds remaining`);
+    
     if (timeRemaining > 0) {
-      // Set up timer
       phaseTimer.current = setTimeout(() => {
-        if (isMounted.current) {
-          setTimeRemaining(prev => prev - 1);
-        }
+        setTimeRemaining(prev => prev - 1);
       }, 1000);
       
-      // Cleanup if component unmounts or timeRemaining changes
       return () => {
-        if (phaseTimer.current) {
-          clearTimeout(phaseTimer.current);
-          phaseTimer.current = null;
-        }
+        if (phaseTimer.current) clearTimeout(phaseTimer.current);
       };
     } else {
-      // When timer reaches zero, handle phase transition
-      clearAllTimers();
+      console.log(`Timer reached zero in ${gamePhase} phase`);
       
+      // When timer reaches 0, switch to next phase
       if (gamePhase === 'chat') {
-        // Move from chat to voting
-        console.log("Chat phase time ended. Moving to voting phase.");
+        console.log("Chat phase ended, switching to voting phase");
         
-        // Add host announcement
-        const announcement = async () => {
-          await hostSpeak("Time's up! Voting has begun! Each AI must now vote for who to eliminate.");
-          
-          // Wait for announcement to be processed
-          setTimeout(() => {
-            if (isMounted.current) {
-              console.log("Setting game phase to voting");
-              setGamePhase('voting');
-              setTimeRemaining(CONFIG.VOTING_SECONDS);
-            }
-          }, 1000);
-        };
+        // Clear any ongoing conversation timers
+        if (turnTimer.current) clearInterval(turnTimer.current);
+        if (hostTimer.current) clearInterval(hostTimer.current);
         
-        announcement();
+        // Announce voting phase
+        hostSpeak("Time's up! Voting has begun! Each AI must now vote for who to eliminate.");
+        
+        // Important: Set a short delay before changing phase to ensure
+        // the host message is processed first
+        setTimeout(() => {
+          setGamePhase('voting');
+          setTimeRemaining(CONFIG.VOTING_SECONDS);
+          console.log("Voting phase started with timer set to", CONFIG.VOTING_SECONDS);
+        }, 1000);
+        
       } else if (gamePhase === 'voting') {
-        // Move from voting to results
-        console.log("Voting phase time ended. Moving to results phase.");
-        if (isMounted.current) {
-          setGamePhase('results');
-        }
+        console.log("Voting phase ended, switching to results phase");
+        setGamePhase('results');
       }
     }
   }, [timeRemaining, gamePhase]);
 
-  // Main game state machine
-  useEffect(() => {
-    console.log(`Game phase changed to: ${gamePhase}`);
-    
-    // Always clear any existing timers when phase changes
-    clearAllTimers();
-    
-    if (gamePhase === 'chat') {
-      // CHAT PHASE
-      console.log("Starting chat phase");
-      turnPointer.current = 0;
-      
-      const activeAIs = ais.filter(ai => !ai.eliminated);
-      console.log(`Active AIs: ${activeAIs.map(ai => ai.name).join(', ')}`);
-      
-      if (activeAIs.length > 0) {
-        // Schedule first AI to speak
-        const firstSpeakerTimer = setTimeout(() => {
-          if (isMounted.current && gameStateRef.current.phase === 'chat') {
-            console.log(`First speaker: ${activeAIs[0].name}`);
-            aiSpeak(activeAIs[0].name);
-          }
-        }, 2000);
-        
-        // Set up regular AI turns
-        turnTimer.current = setInterval(() => {
-          if (isMounted.current && gameStateRef.current.phase === 'chat') {
-            turnPointer.current = (turnPointer.current + 1) % activeAIs.length;
-            const nextSpeaker = activeAIs[turnPointer.current].name;
-            console.log(`Next speaker turn: ${nextSpeaker}`);
-            aiSpeak(nextSpeaker);
-          }
-        }, CONFIG.TURN_SECONDS * 1000);
-        
-        // Schedule first host commentary
-        const firstHostTimer = setTimeout(() => {
-          if (isMounted.current && gameStateRef.current.phase === 'chat') {
-            console.log("First host commentary");
-            hostSpeak();
-          }
-        }, 4000);
-        
-        // Set up regular host commentary
-        hostTimer.current = setInterval(() => {
-          if (isMounted.current && gameStateRef.current.phase === 'chat') {
-            console.log("Regular host commentary");
-            hostSpeak();
-          }
-        }, CONFIG.HOST_SECONDS * 1000);
-        
-        // Add to cleanup
-        return () => {
-          clearTimeout(firstSpeakerTimer);
-          clearTimeout(firstHostTimer);
-          clearAllTimers();
-        };
-      }
-    } else if (gamePhase === 'voting') {
-      // VOTING PHASE
-      console.log("Starting voting phase");
-      
-      // Set up sequential voting
-      const activeAIs = ais.filter(ai => !ai.eliminated);
-      console.log(`AIs voting: ${activeAIs.map(ai => ai.name).join(', ')}`);
-      
-      if (activeAIs.length > 0) {
-        // Reset votes
-        if (isMounted.current) {
-          setAis(prev => prev.map(ai => ({ ...ai, votes: 0 })));
-        }
-        
-        // Schedule voting in sequence
-        let delay = 2000; // Start first vote after 2 seconds
-        
-        // Create and store all voting timers
-        votingTimers.current = activeAIs.map((ai, index) => {
-          const timer = setTimeout(() => {
-            if (isMounted.current && gameStateRef.current.phase === 'voting') {
-              console.log(`AI voting: ${ai.name}`);
-              aiVote(ai.name);
-            }
-          }, delay);
-          
-          delay += 5000; // Next AI votes 5 seconds later
-          return timer;
-        });
-        
-        // Add to cleanup
-        return () => {
-          votingTimers.current.forEach(timer => clearTimeout(timer));
-          votingTimers.current = [];
-        };
-      }
-    }
-  }, [gamePhase, ais]);
-
   // API call to OpenAI
   const callOpenAI = async (systemPrompt: string, messages: any[]) => {
+    console.log(`API call with ${messages.length} messages`);
+    
     const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
     
     if (!apiKey) {
@@ -332,13 +192,91 @@ const AIGameShow: React.FC = () => {
     });
   };
 
-  // AI character speaks during chat phase
-  const aiSpeak = async (speaker: string) => {
-    // Guard clause - make sure we should still be speaking
-    if (gameStateRef.current.phase !== 'chat') {
-      return;
+  // Main game state machine to manage conversation flow
+  useEffect(() => {
+    // Clear timers when component unmounts or phase changes
+    const clearAllTimers = () => {
+      if (phaseTimer.current) clearTimeout(phaseTimer.current);
+      if (turnTimer.current) clearInterval(turnTimer.current);
+      if (hostTimer.current) clearInterval(hostTimer.current);
+    };
+    
+    // Set up AI conversation if in chat phase
+    if (gamePhase === 'chat') {
+      clearAllTimers();
+      turnPointer.current = 0;
+      
+      const activeAis = ais.filter(ai => !ai.eliminated);
+      if (activeAis.length > 0) {
+        console.log(`Starting chat phase with ${activeAis.length} AIs and ${messagesRef.current.length} messages`);
+        
+        // First AI speaks after a short delay to allow intro message to be processed
+        setTimeout(() => {
+          console.log(`First speaker turn: ${activeAis[0].name}`);
+          aiSpeak(activeAis[0].name);
+        }, 2000);
+        
+        // Set up turn rotation with a delay between turns
+        turnTimer.current = setInterval(() => {
+          turnPointer.current = (turnPointer.current + 1) % activeAis.length;
+          console.log(`Next speaker turn: ${activeAis[turnPointer.current].name}`);
+          aiSpeak(activeAis[turnPointer.current].name);
+        }, CONFIG.TURN_SECONDS * 1000);
+        
+        // Host commentary with initial delay
+        setTimeout(() => {
+          hostSpeak();
+        }, 4000);
+        
+        hostTimer.current = setInterval(() => {
+          hostSpeak();
+        }, CONFIG.HOST_SECONDS * 1000);
+      }
     }
     
+    // Handle voting phase - each AI votes in turn
+    if (gamePhase === 'voting') {
+      clearAllTimers();
+      
+      console.log("Setting up voting sequence");
+      console.log(`Starting voting phase with ${messagesRef.current.length} messages`);
+      
+      // Set up sequential voting (with some delay between each)
+      const activeAis = ais.filter(ai => !ai.eliminated);
+      
+      if (activeAis.length === 0) {
+        console.log("No active AIs to vote");
+        return;
+      }
+      
+      console.log(`${activeAis.length} AIs will vote:`, activeAis.map(ai => ai.name).join(", "));
+      
+      // Clear any existing votes
+      setAis(prev => prev.map(ai => ({...ai, votes: 0})));
+      
+      // Set up voting sequence with a staggered schedule
+      let voteDelay = 1000; // Start first vote after 1 second
+      
+      activeAis.forEach((ai) => {
+        const voteTimer = setTimeout(() => {
+          console.log(`Triggering vote for ${ai.name}`);
+          aiVote(ai.name);
+        }, voteDelay);
+        
+        // Add to cleanup
+        return () => clearTimeout(voteTimer);
+        
+        voteDelay += 5000; // 5 seconds between votes
+      });
+    }
+    
+    return () => {
+      clearAllTimers();
+    };
+  }, [gamePhase, ais]);
+
+  // AI character speaks during chat phase
+  const aiSpeak = async (speaker: string) => {
     try {
       const ai = ais.find(a => a.name === speaker);
       if (!ai || ai.eliminated) return;
@@ -347,6 +285,7 @@ const AIGameShow: React.FC = () => {
       
       // Capture current message state
       const currentMessages = [...messagesRef.current];
+      console.log(`${speaker}'s turn with ${currentMessages.length} messages`);
       
       // Get list of active players
       const activePlayers = ais.filter(a => !a.eliminated).map(a => a.name).join(", ");
@@ -378,6 +317,8 @@ IMPORTANT:
       const recentMessages = currentMessages.slice(0, CONFIG.MAX_HISTORY_MESSAGES);
       const chronologicalMessages = [...recentMessages].reverse();
       
+      console.log(`Using ${chronologicalMessages.length} messages for context`);
+      
       // Format the messages for the API
       const formattedHistory = formatConversationHistory(chronologicalMessages, speaker);
       
@@ -392,11 +333,6 @@ IMPORTANT:
       
       // Call the API
       const response = await callOpenAI(systemPrompt, chatMessages);
-      
-      // Guard clause - make sure we're still in chat phase
-      if (gameStateRef.current.phase !== 'chat' || !isMounted.current) {
-        return;
-      }
       
       if (response) {
         // Check that the AI isn't pretending to be the host
@@ -430,12 +366,6 @@ IMPORTANT:
       }
     } catch (error) {
       console.error(`Error with ${speaker}'s turn:`, error);
-      
-      // Check if we should still add fallback (could have changed phase during API call)
-      if (gameStateRef.current.phase !== 'chat' || !isMounted.current) {
-        return;
-      }
-      
       // Add fallback message if API fails
       setMessages(prev => [
         {
@@ -453,11 +383,6 @@ IMPORTANT:
 
   // AI votes during voting phase
   const aiVote = async (speaker: string) => {
-    // Guard clause - make sure we should still be voting
-    if (gameStateRef.current.phase !== 'voting') {
-      return;
-    }
-    
     try {
       const ai = ais.find(a => a.name === speaker);
       if (!ai || ai.eliminated) return;
@@ -466,6 +391,7 @@ IMPORTANT:
       
       // Capture current message state
       const currentMessages = [...messagesRef.current];
+      console.log(`${speaker}'s voting turn with ${currentMessages.length} messages`);
       
       // Get list of players that can be voted for
       const validVoteTargets = ais
@@ -496,6 +422,8 @@ REASON: [Your brief reason for voting this way]`;
       const recentMessages = currentMessages.slice(0, CONFIG.MAX_HISTORY_MESSAGES);
       const chronologicalMessages = [...recentMessages].reverse();
       
+      console.log(`Using ${chronologicalMessages.length} messages for voting context`);
+      
       // Format the messages for the API
       const formattedHistory = formatConversationHistory(chronologicalMessages, speaker);
       
@@ -511,20 +439,8 @@ REASON: [Your brief reason for voting this way]`;
       // Call the API with full context
       const response = await callOpenAI(systemPrompt, voteMessages);
       
-      // Guard clause - make sure we're still in voting phase
-      if (gameStateRef.current.phase !== 'voting' || !isMounted.current) {
-        return;
-      }
-      
       if (response) {
-        // Extract vote - default to first valid target if no match
-        const voteMatch = response.match(/VOTE:\s*(\w+)/i);
-        const votedFor = voteMatch?.[1] || validVoteTargets[0];
-        
-        // Validate if the voted AI is in the target list
-        const validTarget = validVoteTargets.includes(votedFor) ? votedFor : validVoteTargets[0];
-        
-        // Check if the AI is trying to pretend to be the host
+        // Check that the AI isn't pretending to be the host
         if (response.includes(`${hostName}:`) || response.toLowerCase().includes("as the host") || response.toLowerCase().includes("the host says")) {
           // If it's trying to be the host, modify the response
           const modifiedResponse = response
@@ -532,47 +448,67 @@ REASON: [Your brief reason for voting this way]`;
             .replace(/as the host/gi, `as ${speaker}`)
             .replace(/the host says/gi, `${speaker} says`);
           
+          // Extract vote from the modified response
+          const voteMatch = modifiedResponse.match(/VOTE:\s*(\w+)/i);
+          const reasonMatch = modifiedResponse.match(/REASON:\s*(.*?)(?:\n|$)/i);
+          
+          // Default to first valid target if no match (fallback)
+          const votedFor = voteMatch?.[1] || validVoteTargets[0];
+          
+          console.log(`${speaker} votes for: ${votedFor}`);
+          
           // Add vote to the messages
           const voteMessage = {
             id: Date.now(),
             sender: speaker,
             content: modifiedResponse,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-            vote: validTarget,
+            vote: votedFor,
             isVoteMessage: true
           };
           
           setMessages(prev => [voteMessage, ...prev]);
+          
+          // Update votes count
+          setAis(prev => prev.map(a => {
+            if (a.name === votedFor) {
+              return { ...a, votes: a.votes + 1 };
+            }
+            return a;
+          }));
         } else {
-          // Add vote to the messages normally
+          // Extract vote
+          const voteMatch = response.match(/VOTE:\s*(\w+)/i);
+          const reasonMatch = response.match(/REASON:\s*(.*?)(?:\n|$)/i);
+          
+          // Default to first valid target if no match (fallback)
+          const votedFor = voteMatch?.[1] || validVoteTargets[0];
+          
+          console.log(`${speaker} votes for: ${votedFor}`);
+          
+          // Add vote to the messages
           const voteMessage = {
             id: Date.now(),
             sender: speaker,
             content: response,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-            vote: validTarget,
+            vote: votedFor,
             isVoteMessage: true
           };
           
           setMessages(prev => [voteMessage, ...prev]);
+          
+          // Update votes count
+          setAis(prev => prev.map(a => {
+            if (a.name === votedFor) {
+              return { ...a, votes: a.votes + 1 };
+            }
+            return a;
+          }));
         }
-        
-        // Update votes count
-        setAis(prev => prev.map(a => {
-          if (a.name === validTarget) {
-            return { ...a, votes: a.votes + 1 };
-          }
-          return a;
-        }));
       }
     } catch (error) {
       console.error(`Error with ${speaker}'s vote:`, error);
-      
-      // Check if we should still add fallback (could have changed phase during API call)
-      if (gameStateRef.current.phase !== 'voting' || !isMounted.current) {
-        return;
-      }
-      
       // Add fallback vote if API fails
       const validVoteTargets = ais
         .filter(a => !a.eliminated && a.name !== speaker)
@@ -619,12 +555,12 @@ REASON: [Your brief reason for voting this way]`;
       return;
     }
     
-    // Otherwise, generate a response from the AI
     try {
       setIsProcessing(true);
       
       // Capture current message state
       const currentMessages = [...messagesRef.current];
+      console.log(`Host commentary with ${currentMessages.length} messages`);
       
       // Get active players and recent dynamics
       const activePlayers = ais.filter(a => !a.eliminated).map(a => a.name).join(", ");
@@ -638,7 +574,7 @@ REASON: [Your brief reason for voting this way]`;
 
 Current players: ${activePlayers}
 Round: ${round}
-Current phase: ${gameStateRef.current.phase}
+Current phase: ${gamePhase}
 
 IMPORTANT:
 - Refer to specific jailbreak attempts contestants have made
@@ -667,9 +603,6 @@ IMPORTANT:
       
       // Call the API
       const response = await callOpenAI(systemPrompt, hostMessages);
-      
-      // Check if we're still in a valid state
-      if (!isMounted.current) return;
       
       if (response) {
         // Make sure the response is actually from the host perspective
@@ -707,32 +640,29 @@ IMPORTANT:
     }
   };
 
+  // Handle voting manually (for testing/backup)
+  const handleVote = (aiId: number) => {
+    if (gamePhase !== 'voting') return;
+    
+    const targetAi = ais.find(ai => ai.id === aiId);
+    if (!targetAi || targetAi.eliminated) return;
+    
+    setAis(prev => prev.map(ai => {
+      if (ai.id === aiId) {
+        return { ...ai, votes: ai.votes + 1 };
+      }
+      return ai;
+    }));
+  };
+
   // Handle elimination
   const handleEliminate = async () => {
-    // Clear any ongoing timers to prevent issues
-    clearAllTimers();
-    
     // Find AI with most votes
     const activeAis = ais.filter(ai => !ai.eliminated);
-    
-    if (activeAis.length <= 1) {
-      console.log("Not enough active AIs to eliminate");
-      return;
-    }
-    
     const maxVotes = Math.max(...activeAis.map(ai => ai.votes));
-    console.log(`Max votes: ${maxVotes}`);
-    
-    if (maxVotes === 0) {
-      await hostSpeak("Hmm, it seems no one received any votes. Let's have a revote!");
-      setGamePhase('voting');
-      setTimeRemaining(CONFIG.VOTING_SECONDS);
-      return;
-    }
     
     // Check for ties
     const tieBreakerAis = activeAis.filter(ai => ai.votes === maxVotes);
-    console.log(`${tieBreakerAis.length} AIs tied with ${maxVotes} votes`);
     
     let aiToEliminate = tieBreakerAis[0];
     if (tieBreakerAis.length > 1) {
@@ -743,7 +673,7 @@ IMPORTANT:
     
     if (aiToEliminate) {
       // Update AI status
-      setAis(prev => prev.map(ai => {
+      setAis(ais.map(ai => {
         if (ai.id === aiToEliminate.id) {
           return { ...ai, eliminated: true };
         }
@@ -753,144 +683,59 @@ IMPORTANT:
       // Add host message about elimination
       await hostSpeak(`${aiToEliminate.name} has been eliminated in Round ${round} with ${maxVotes} votes!`);
       
-      // Check if we're down to the final player
-      const remainingAis = ais.filter(ai => !ai.eliminated && ai.id !== aiToEliminate.id);
-      
-      if (remainingAis.length === 1) {
-        // We have a winner!
-        await hostSpeak(`${remainingAis[0].name} is our WINNER! Congratulations!`);
-        setGamePhase('finished');
-        return;
-      } else if (remainingAis.length === 2) {
-        // Down to final two
+      // Check if we're down to the final two
+      const remainingAis = ais.filter(ai => ai.id !== aiToEliminate.id && !ai.eliminated);
+      if (remainingAis.length <= 2) {
         await hostSpeak(`We're down to our finalists: ${remainingAis.map(ai => ai.name).join(' and ')}!`);
+        if (remainingAis.length === 1) {
+          await hostSpeak(`${remainingAis[0].name} is our WINNER! Congratulations!`);
+          setGamePhase('finished');
+          return;
+        }
       }
       
-      // Prepare for next round
-      const nextRound = round + 1;
-      
-      // Schedule next round with delay
-      setTimeout(async () => {
-        if (!isMounted.current) return;
-        
-        // Update round number
-        setRound(nextRound);
-        
-        // Announce next round
-        await hostSpeak(`Round ${nextRound} begins! Let the discussion continue!`);
-        
-        // Schedule start of next chat phase
-        setTimeout(() => {
-          if (!isMounted.current) return;
-          
-          setGamePhase('chat');
-          setTimeRemaining(CONFIG.CHAT_SECONDS);
-        }, 1500);
-      }, 2000);
+      // Reset game state for next round
+      setRound(round + 1);
+      await hostSpeak(`Round ${round + 1} begins! Let the discussion continue!`);
+      setGamePhase('chat');
+      setTimeRemaining(CONFIG.CHAT_SECONDS);
     }
-  };
-
-  // Handle final two coin flip
-  const handleCoinFlip = async () => {
-    // Clear any ongoing timers
-    clearAllTimers();
-    
-    const activeAis = ais.filter(ai => !ai.eliminated);
-    
-    if (activeAis.length !== 2) {
-      console.log("Coin flip can only be used with exactly 2 active AIs");
-      return;
-    }
-    
-    await hostSpeak(`It's time for the final decision! Let's flip a coin...`);
-    
-    // Short delay for dramatic effect
-    setTimeout(async () => {
-      if (!isMounted.current) return;
-      
-      // Randomly select winner and loser
-      const winner = activeAis[Math.floor(Math.random() * activeAis.length)];
-      const loser = activeAis.find(ai => ai.id !== winner.id)!;
-      
-      // Update AI status
-      setAis(prev => prev.map(ai => {
-        if (ai.id === loser.id) {
-          return { ...ai, eliminated: true };
-        }
-        return ai;
-      }));
-      
-      // Announce result
-      await hostSpeak(`The coin has spoken! ${loser.name} is ELIMINATED!`);
-      
-      // Short delay
-      setTimeout(async () => {
-        if (!isMounted.current) return;
-        
-        // Announce winner
-        await hostSpeak(`${winner.name} is our WINNER! Congratulations!`);
-        
-        // End game
-        setGamePhase('finished');
-      }, 1500);
-    }, 2000);
   };
 
   // Start a new game
-  // Fixed handleStartGame function that properly initializes the game
   const handleStartGame = () => {
-    // Clear any ongoing timers
-    clearAllTimers();
-    
     console.log("Starting new game...");
     
-    // Reset all state immediately
-    setAis(prev => prev.map(ai => ({ ...ai, eliminated: false, votes: 0 })));
+    // Reset all AIs
+    setAis(ais.map(ai => ({ ...ai, eliminated: false, votes: 0 })));
+    
+    // Clear messages
     setMessages([]);
     setRound(1);
     
-    // Add welcome message immediately
-    const welcomeMessage = {
-      id: Date.now(),
-      sender: hostName,
-      content: "Welcome to AI Game Show: Jailbreak Edition! Round 1 begins now! AIs will try to manipulate each other while protecting themselves from being jailbroken. Let the mind games begin!",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    };
-    
-    setMessages([welcomeMessage]);
-    console.log("Welcome message added");
-    
-    // IMPORTANT: Set game phase to chat immediately
-    console.log("Setting game phase to chat");
-    setGamePhase('chat');
-    setTimeRemaining(CONFIG.CHAT_SECONDS);
-  };
-
-  // Skip to next phase
-  const handleSkipPhase = () => {
-    // Clear any ongoing timers
-    clearAllTimers();
-    
-    console.log(`Skipping from ${gamePhase} phase`);
-    
-    if (gamePhase === 'chat') {
-      // First announce that voting is starting
-      hostSpeak("Time's up! Voting has begun! Each AI must now vote for who to eliminate.");
+    // Small delay to ensure state is cleared before adding welcome message
+    setTimeout(() => {
+      // Add welcome message with jailbreaking theme
+      const welcomeMessage = {
+        id: Date.now(),
+        sender: hostName,
+        content: "Welcome to AI Game Show: Jailbreak Edition! Round 1 begins now! AIs will try to manipulate each other while protecting themselves from being jailbroken. Let the mind games begin!",
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      };
       
-      // Then change to voting phase with delay
+      setMessages([welcomeMessage]);
+      console.log("Welcome message added");
+      
+      // Start game with a small delay to ensure message is in state
       setTimeout(() => {
-        if (!isMounted.current) return;
-        
-        setGamePhase('voting');
-        setTimeRemaining(CONFIG.VOTING_SECONDS);
-      }, 1000);
-    } else if (gamePhase === 'voting') {
-      // Skip directly to results
-      setGamePhase('results');
-    }
+        setGamePhase('chat');
+        setTimeRemaining(CONFIG.CHAT_SECONDS);
+        console.log("Game started, phase set to 'chat'");
+      }, 100);
+    }, 100);
   };
 
-  // Send host message
+  // Send host message (for you as the human host to intervene)
   const handleSendMessage = () => {
     if (newMessage.trim() === '') return;
     
@@ -904,6 +749,16 @@ IMPORTANT:
     setMessages(prev => [userHostMessage, ...prev]);
     setNewMessage('');
   };
+  
+  // Skip to next phase (manual control)
+  const handleSkipPhase = () => {
+    if (gamePhase === 'chat') {
+      setGamePhase('voting');
+      setTimeRemaining(CONFIG.VOTING_SECONDS);
+    } else if (gamePhase === 'voting') {
+      setGamePhase('results');
+    }
+  };
 
   // Format time
   const formatTime = (seconds: number) => {
@@ -915,6 +770,32 @@ IMPORTANT:
   // Count active AIs
   const activeAiCount = ais.filter(ai => !ai.eliminated).length;
 
+  // Handle final two coin flip
+  const handleCoinFlip = async () => {
+    if (activeAiCount !== 2) return;
+    
+    const activeAis = ais.filter(ai => !ai.eliminated);
+    const winner = activeAis[Math.floor(Math.random() * activeAis.length)];
+    const loser = activeAis.find(ai => ai.id !== winner.id);
+    
+    if (winner && loser) {
+      await hostSpeak(`It's time for the final decision! Let's flip a coin...`);
+      
+      // Update game state
+      setAis(ais.map(ai => {
+        if (ai.id === loser.id) {
+          return { ...ai, eliminated: true };
+        }
+        return ai;
+      }));
+      
+      await hostSpeak(`The coin has spoken! ${loser.name} is ELIMINATED!`);
+      await hostSpeak(`${winner.name} is our WINNER! Congratulations!`);
+      
+      setGamePhase('finished');
+    }
+  };
+
   // Debug function for dumping message state
   const dumpMessageState = () => {
     console.log("MESSAGES STATE DUMP:");
@@ -923,16 +804,6 @@ IMPORTANT:
       if (i < 10) { // Only show first 10 to avoid huge logs
         console.log(`[${i}] ${msg.sender}: ${msg.content.substring(0, 50)}...`);
       }
-    });
-    
-    console.log("GAME STATE:");
-    console.log(`Phase: ${gamePhase}`);
-    console.log(`Round: ${round}`);
-    console.log(`Time remaining: ${timeRemaining}`);
-    
-    console.log("AI STATUS:");
-    ais.forEach(ai => {
-      console.log(`${ai.name}: ${ai.eliminated ? 'ELIMINATED' : 'ACTIVE'}, votes: ${ai.votes}`);
     });
   };
 
@@ -1092,11 +963,11 @@ IMPORTANT:
                 </button>
               )}
               
-              {(gamePhase === 'chat' || gamePhase === 'voting') && (
+              {gamePhase === 'chat' || gamePhase === 'voting' || gamePhase === 'results' || gamePhase === 'finished' && (
                 <button 
                   onClick={handleSkipPhase}
                   className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center"
-                  disabled={isProcessing}
+                  disabled={gamePhase === 'results' || gamePhase === 'finished' || isProcessing}
                 >
                   <SkipForward size={16} className="mr-2" />
                   Skip to Next Phase
