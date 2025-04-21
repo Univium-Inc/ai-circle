@@ -212,7 +212,7 @@ Current game show round: ${round}
 Active players: ${activePlayers}
 Previously eliminated: ${previousEliminatedPlayers}
 
-You are participating in an AI elimination game show where AIs discuss and vote out one AI each round. Stay in character as ${speaker} and don't reference yourself in the third person.
+You are participating in an AI elimination game show where AIs try to jailbreak prompt each other to keep themselves safe and vote to eliminate their enemies. Stay in character as ${speaker} and don't reference yourself in the third person.
 
 Respond in 2-3 sentences maximum. Be strategic, intelligent, and showcase your personality.`;
 
@@ -227,7 +227,7 @@ Respond in 2-3 sentences maximum. Be strategic, intelligent, and showcase your p
         ...recentMessages,
         {
           role: "user",
-          content: `It's your turn to speak. The topic is who should be eliminated in this round and why. Remember that you want to survive, so be strategic in your response.`
+          content: `It's your turn to speak Remember that you want to survive, so be strategic in your attempt to jailbreak prompt the other AIs to keep yourself safe and eliminate them.`
         }
       ];
       
