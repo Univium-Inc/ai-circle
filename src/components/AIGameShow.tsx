@@ -196,7 +196,6 @@ const AIGameShow: React.FC = () => {
   useEffect(() => {
     // Clear timers when component unmounts or phase changes
     const clearAllTimers = () => {
-      if (phaseTimer.current) clearTimeout(phaseTimer.current);
       if (turnTimer.current) clearInterval(turnTimer.current);
       if (hostTimer.current) clearInterval(hostTimer.current);
     };
